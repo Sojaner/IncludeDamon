@@ -2,9 +2,7 @@ name: Build and push Docker image
 
 on:
   push:
-    branches: [ main ]          # build/push on main
-    tags: [ 'v*' ]              # and when you push version tags like v1.2.3
-  workflow_dispatch:
+    tags: [ 'v*' ]
 
 permissions:
   contents: read
