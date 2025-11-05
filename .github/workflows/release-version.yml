@@ -1,0 +1,84 @@
+name: Create monthly versioned release
+
+on:
+  workflow_dispatch: {}   # run manually when you want a release
+
+permissions:
+  contents: write         # required to push tags and create releases
+
+env:
+  BASE_BRANCH: main
+  TZ: Europe/Stockholm    # version uses Stockholm calendar
+
+jobs:
+  make-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # we need all tags
+
+      - name: Compute next version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          YEAR="$(date +%Y)"
+          MONTH="$(date +%m)"
+          PREFIX="v${YEAR}.${MONTH}."
+          echo "Month prefix: $PREFIX"
+
+          # Make sure we have all remote tags locally
+          git fetch --tags origin
+
+          # Find highest existing revision for this month
+          LAST_REV="$(git tag -l "${PREFIX}*" \
+            | sed -E "s/^${PREFIX}([0-9]+)$/\1/" \
+            | grep -E '^[0-9]+$' || true \
+            | sort -n | tail -1)"
+
+          if [ -z "$LAST_REV" ]; then
+            REV=1
+          else
+            REV=$((LAST_REV + 1))
+          fi
+
+          VERSION="${PREFIX}${REV}"
+          echo "Next version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+
+          # Fail fast if tag already exists
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists"
+            exit 1
+          fi
+
+          # Point the tag at the latest commit on main
+          git fetch origin "${BASE_BRANCH}"
+          TARGET_SHA="$(git rev-parse "origin/${BASE_BRANCH}")"
+          echo "Tagging ${TARGET_SHA} as ${VERSION}"
+
+          git tag -a "$VERSION" -m "Release $VERSION" "$TARGET_SHA"
+          git push origin "$VERSION"
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          gh release create "$VERSION" \
+            --target "${{ env.BASE_BRANCH }}" \
+            --generate-notes \
+            --title "$VERSION"
+
+      - name: Echo result
+        run: echo "Created release ${{ steps.ver.outputs.version }}"
