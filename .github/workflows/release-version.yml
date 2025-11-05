@@ -55,20 +55,25 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.ver.outputs.version }}"
-
-          # Fail fast if tag already exists
+      
+          # Configure Git identity for tagging
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+      
+          # Fail if tag already exists
           if git rev-parse "$VERSION" >/dev/null 2>&1; then
             echo "Tag $VERSION already exists"
             exit 1
           fi
-
-          # Point the tag at the latest commit on main
+      
+          # Tag last commit on main
           git fetch origin "${BASE_BRANCH}"
           TARGET_SHA="$(git rev-parse "origin/${BASE_BRANCH}")"
           echo "Tagging ${TARGET_SHA} as ${VERSION}"
-
+      
           git tag -a "$VERSION" -m "Release $VERSION" "$TARGET_SHA"
           git push origin "$VERSION"
+
 
       - name: Create GitHub Release
         env:
