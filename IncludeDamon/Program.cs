@@ -177,8 +177,10 @@ internal class Client : IDisposable
 
         foreach (MonitorTarget target in targets)
         {
-            switch (target.ResourceType)
+            switch (target.ResourceType.ToLower())
             {
+                case "ds":
+                case "daemonset":
                 case "daemonsets":
                 {
                     count += _kubernetes.ReadNamespacedDaemonSet(target.ResourceName, target.Namespace).Status
@@ -186,6 +188,8 @@ internal class Client : IDisposable
 
                     break;
                 }
+                case "deploy":
+                case "deployment":
                 case "deployments":
                 {
                     count += _kubernetes.ReadNamespacedDeployment(target.ResourceName, target.Namespace).Spec
