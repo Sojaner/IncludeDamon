@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using Humanizer;
@@ -86,6 +87,15 @@ internal enum Status
     Problem
 }
 
+internal enum MonitorResourceType
+{
+    Unknown,
+
+    DaemonSet,
+
+    Deployment
+}
+
 internal class Client : IDisposable
 {
     private readonly Kubernetes _kubernetes = new(KubernetesClientConfiguration.InClusterConfig());
@@ -155,11 +165,32 @@ internal class Client : IDisposable
 
     private async Task<List<V1Pod>> GetPodsAsync(MonitorTarget target)
     {
-        return
-        [
-            ..(await _kubernetes.ListNamespacedPodAsync(target.Namespace, labelSelector: target.LabelSelector))
-            .Items
-        ];
+        List<V1Pod> pods = await ListPodsAsync(target.Namespace, target.LabelSelector);
+
+        if (pods.Count > 0)
+        {
+            return pods;
+        }
+
+        string? resolvedSelector = ResolveSelectorFromResource(target);
+
+        if (!IsNullOrWhiteSpace(resolvedSelector) &&
+            !string.Equals(resolvedSelector, target.LabelSelector, StringComparison.Ordinal))
+        {
+            if (target.TryUpdateLabelSelector(resolvedSelector))
+            {
+                Console.WriteLine($"[SELECTOR RESOLVED] {target} -> {resolvedSelector}");
+            }
+
+            pods = await ListPodsAsync(target.Namespace, resolvedSelector);
+        }
+
+        if (pods.Count == 0)
+        {
+            Console.WriteLine($"[NO PODS FOUND] {target} using selector '{target.LabelSelector ?? "<none>"}'");
+        }
+
+        return pods;
     }
 
     private readonly MemoryCache _cache = new(new MemoryCacheOptions());
@@ -177,23 +208,33 @@ internal class Client : IDisposable
 
         foreach (MonitorTarget target in targets)
         {
-            switch (target.ResourceType.ToLower())
+            switch (target.ResourceKind)
             {
-                case "ds":
-                case "daemonset":
-                case "daemonsets":
+                case MonitorResourceType.DaemonSet:
                 {
-                    count += _kubernetes.ReadNamespacedDaemonSet(target.ResourceName, target.Namespace).Status
-                        .DesiredNumberScheduled;
+                    V1DaemonSet daemonSet =
+                        _kubernetes.ReadNamespacedDaemonSet(target.ResourceName, target.Namespace);
+
+                    count += daemonSet.Status?.DesiredNumberScheduled ?? 0;
+
+                    TryUpdateLabelSelectorFromResource(target, daemonSet.Spec?.Selector);
 
                     break;
                 }
-                case "deploy":
-                case "deployment":
-                case "deployments":
+                case MonitorResourceType.Deployment:
                 {
-                    count += _kubernetes.ReadNamespacedDeployment(target.ResourceName, target.Namespace).Spec
-                        .Replicas ?? 1;
+                    V1Deployment deployment =
+                        _kubernetes.ReadNamespacedDeployment(target.ResourceName, target.Namespace);
+
+                    count += deployment.Spec?.Replicas ?? 1;
+
+                    TryUpdateLabelSelectorFromResource(target, deployment.Spec?.Selector);
+
+                    break;
+                }
+                default:
+                {
+                    Console.WriteLine($"[UNSUPPORTED TARGET] {target} ({target.ResourceType})");
 
                     break;
                 }
@@ -203,6 +244,107 @@ internal class Client : IDisposable
         _cache.Set(key, count, TimeSpan.FromSeconds(45));
 
         return count;
+    }
+
+    private async Task<List<V1Pod>> ListPodsAsync(string namespaceName, string? labelSelector)
+    {
+        try
+        {
+            string? selector = IsNullOrWhiteSpace(labelSelector) ? null : labelSelector;
+
+            V1PodList podList = await _kubernetes.ListNamespacedPodAsync(namespaceName, labelSelector: selector);
+
+            return [..podList.Items];
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(
+                $"[LIST PODS FAILED] {namespaceName} selector '{labelSelector ?? "<none>"}': {e.Message}");
+
+            return [];
+        }
+    }
+
+    private void TryUpdateLabelSelectorFromResource(MonitorTarget target, V1LabelSelector? selector)
+    {
+        if (target.HasLabelSelector)
+        {
+            return;
+        }
+
+        string? resolvedSelector = BuildSelectorString(selector);
+
+        if (target.TryUpdateLabelSelector(resolvedSelector))
+        {
+            Console.WriteLine($"[SELECTOR RESOLVED] {target} -> {resolvedSelector}");
+        }
+    }
+
+    private string? ResolveSelectorFromResource(MonitorTarget target)
+    {
+        try
+        {
+            return target.ResourceKind switch
+            {
+                MonitorResourceType.DaemonSet => BuildSelectorString(
+                    _kubernetes.ReadNamespacedDaemonSet(target.ResourceName, target.Namespace).Spec?.Selector),
+                MonitorResourceType.Deployment => BuildSelectorString(
+                    _kubernetes.ReadNamespacedDeployment(target.ResourceName, target.Namespace).Spec?.Selector),
+                _ => null
+            };
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"[SELECTOR RESOLUTION FAILED] {target} ({target.ResourceType}): {e.Message}");
+
+            return null;
+        }
+    }
+
+    private static string? BuildSelectorString(V1LabelSelector? selector)
+    {
+        if (selector is null)
+        {
+            return null;
+        }
+
+        List<string> expressions = [];
+
+        if (selector.MatchLabels is { Count: > 0 })
+        {
+            expressions.AddRange(selector.MatchLabels.Select(kvp => $"{kvp.Key}={kvp.Value}"));
+        }
+
+        if (selector.MatchExpressions is { Count: > 0 })
+        {
+            foreach (V1LabelSelectorRequirement requirement in selector.MatchExpressions)
+            {
+                if (IsNullOrWhiteSpace(requirement.Key) || IsNullOrWhiteSpace(requirement.OperatorProperty))
+                {
+                    continue;
+                }
+
+                IList<string>? values = requirement.Values;
+
+                switch (requirement.OperatorProperty)
+                {
+                    case "In" when values is { Count: > 0 }:
+                        expressions.Add($"{requirement.Key} in ({Join(",", values)})");
+                        break;
+                    case "NotIn" when values is { Count: > 0 }:
+                        expressions.Add($"{requirement.Key} notin ({Join(",", values)})");
+                        break;
+                    case "Exists":
+                        expressions.Add(requirement.Key);
+                        break;
+                    case "DoesNotExist":
+                        expressions.Add($"!{requirement.Key}");
+                        break;
+                }
+            }
+        }
+
+        return expressions.Count == 0 ? null : Join(",", expressions);
     }
 
     private async Task SetMetricsAsync()
@@ -755,32 +897,80 @@ internal static class Extensions
     }
 }
 
-internal sealed class MonitorTarget(
-    string namespaceName,
-    string resourceType,
-    string resourceName,
-    string labelSelector,
-    string[] paths,
-    Uri externalBaseUri,
-    string hostHeader)
+internal sealed class MonitorTarget
 {
-    public string Namespace { get; } = namespaceName;
+    private string? _labelSelector;
 
-    public string ResourceType { get; } = resourceType;
+    internal MonitorTarget(
+        string namespaceName,
+        string resourceType,
+        string resourceName,
+        MonitorResourceType resourceKind,
+        string? labelSelector,
+        string[] paths,
+        Uri externalBaseUri,
+        string hostHeader)
+    {
+        Namespace = namespaceName;
+        ResourceType = resourceType;
+        ResourceName = resourceName;
+        ResourceKind = resourceKind;
+        _labelSelector = labelSelector;
+        Paths = paths;
+        ExternalBaseUri = externalBaseUri;
+        HostHeader = hostHeader;
+    }
 
-    public string ResourceName { get; } = resourceName;
+    public string Namespace { get; }
 
-    public string LabelSelector { get; } = labelSelector;
+    public string ResourceType { get; }
 
-    public string[] Paths { get; } = paths;
+    public string ResourceName { get; }
 
-    public Uri ExternalBaseUri { get; } = externalBaseUri;
+    public MonitorResourceType ResourceKind { get; }
 
-    public string HostHeader { get; } = hostHeader;
+    public string? LabelSelector => _labelSelector;
+
+    public bool HasLabelSelector => !IsNullOrWhiteSpace(_labelSelector);
+
+    public string[] Paths { get; }
+
+    public Uri ExternalBaseUri { get; }
+
+    public string HostHeader { get; }
+
+    public bool TryUpdateLabelSelector(string? labelSelector)
+    {
+        if (IsNullOrWhiteSpace(labelSelector))
+        {
+            return false;
+        }
+
+        if (string.Equals(_labelSelector, labelSelector, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        _labelSelector = labelSelector;
+
+        return true;
+    }
 
     public override string ToString()
     {
         return $"{Namespace}/{ResourceType}/{ResourceName}";
+    }
+
+    public static bool TryParseResourceKind(string resourceType, out MonitorResourceType resourceKind)
+    {
+        resourceKind = resourceType?.Trim().ToLowerInvariant() switch
+        {
+            "ds" or "daemonset" or "daemonsets" => MonitorResourceType.DaemonSet,
+            "deploy" or "deployment" or "deployments" => MonitorResourceType.Deployment,
+            _ => MonitorResourceType.Unknown
+        };
+
+        return resourceKind != MonitorResourceType.Unknown;
     }
 }
 
@@ -812,7 +1002,7 @@ internal static class MonitorConfiguration
     {
         string slackWebhookUrl = GetRequiredEnv("SLACK_WEBHOOK_URL");
 
-        string labelSelectorFormat = GetRequiredEnv("LABEL_SELECTOR_FORMAT");
+        string? labelSelectorFormat = Environment.GetEnvironmentVariable("LABEL_SELECTOR_FORMAT");
 
         double responseTimeoutSeconds = GetRequiredDouble("RESPONSE_TIMEOUT_SECONDS");
 
@@ -847,7 +1037,7 @@ internal static class MonitorConfiguration
             targets);
     }
 
-    private static MonitorTarget[] ParseTargets(string rawTargets, string labelSelectorFormat)
+    private static MonitorTarget[] ParseTargets(string rawTargets, string? labelSelectorFormat)
     {
         List<MonitorTarget> targets = [];
 
@@ -879,6 +1069,12 @@ internal static class MonitorConfiguration
 
             string resourceName = resourceParts[2];
 
+            if (!MonitorTarget.TryParseResourceKind(resourceType, out MonitorResourceType resourceKind))
+            {
+                throw new ConfigurationException(
+                    $"Resource type '{resourceType}' for target '{entry}' is not supported. Use 'daemonset' or 'deployment'.");
+            }
+
             string hostSegment = segments[1];
 
             if (IsNullOrWhiteSpace(hostSegment))
@@ -892,22 +1088,21 @@ internal static class MonitorConfiguration
 
             string[] paths = ParsePaths(pathsSegment);
 
-            if (segments.Length < 4 && IsNullOrWhiteSpace(labelSelectorFormat))
-            {
-                throw new ConfigurationException($"Either a Label Selector for the target '{entry}' or a Label Selector Format must be provided.");
-            }
-
-            string labelSelector = segments.Length > 3 && !IsNullOrWhiteSpace(segments[3])
-                ? segments[3]
-                : Format(CultureInfo.InvariantCulture, labelSelectorFormat, resourceName, namespaceName);
+            string? labelSelector = segments.Length > 3 ? segments[3] : null;
 
             labelSelector = NormalizeLabelSelector(labelSelector);
+
+            if (labelSelector is null && !IsNullOrWhiteSpace(labelSelectorFormat))
+            {
+                labelSelector = NormalizeLabelSelector(
+                    Format(CultureInfo.InvariantCulture, labelSelectorFormat, resourceName, namespaceName));
+            }
 
             string hostHeader = externalBaseUri.IsDefaultPort
                 ? externalBaseUri.Host
                 : $"{externalBaseUri.Host}:{externalBaseUri.Port}";
 
-            targets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, labelSelector, paths,
+            targets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, labelSelector, paths,
                 externalBaseUri, hostHeader));
         }
 
@@ -939,13 +1134,16 @@ internal static class MonitorConfiguration
             : paths;
     }
 
-    private static string NormalizeLabelSelector(string labelSelector)
+    private static string? NormalizeLabelSelector(string? labelSelector)
     {
+        if (IsNullOrWhiteSpace(labelSelector))
+        {
+            return null;
+        }
+
         string normalized = labelSelector.Replace("\"", Empty).Trim();
 
-        return IsNullOrWhiteSpace(normalized)
-            ? throw new ConfigurationException("Label Selector must resolve to a non-empty value.")
-            : normalized;
+        return IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private static string NormalizePath(string path)
