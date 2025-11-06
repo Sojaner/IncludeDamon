@@ -33,12 +33,18 @@ jobs:
           
           git fetch --tags origin
           
-          # Find highest existing revision for this month
-          LAST_REV=$(git tag -l "${PREFIX}*" | sed -E "s/^${PREFIX}([0-9]+)$/\1/" | grep -E '^[0-9]+$' || true | sort -n | tail -1 || true)
-          if [ -z "${LAST_REV:-}" ]; then
+          # Find the latest tag for this month and bump its numeric revision
+          LAST_TAG=$(git tag -l "${PREFIX}[0-9]*" --sort=version:refname | tail -n 1)
+          if [ -z "${LAST_TAG}" ]; then
             REV=1
           else
-            REV=$((LAST_REV + 1))
+            LAST_REV="${LAST_TAG#${PREFIX}}"
+            if [[ "${LAST_REV}" =~ ^[0-9]+$ ]]; then
+              REV=$((LAST_REV + 1))
+            else
+              echo "Latest tag ${LAST_TAG} does not end with a numeric revision" >&2
+              exit 1
+            fi
           fi
           
           VERSION="${PREFIX}${REV}"
