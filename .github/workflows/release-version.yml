@@ -30,22 +30,17 @@ jobs:
           MONTH="$(date +%m)"
           PREFIX="v${YEAR}.${MONTH}."
           echo "Month prefix: $PREFIX"
-
-          # Make sure we have all remote tags locally
+          
           git fetch --tags origin
-
+          
           # Find highest existing revision for this month
-          LAST_REV="$(git tag -l "${PREFIX}*" \
-            | sed -E "s/^${PREFIX}([0-9]+)$/\1/" \
-            | grep -E '^[0-9]+$' || true \
-            | sort -n | tail -1)"
-
-          if [ -z "$LAST_REV" ]; then
+          LAST_REV=$(git tag -l "${PREFIX}*" | sed -E "s/^${PREFIX}([0-9]+)$/\1/" | grep -E '^[0-9]+$' || true | sort -n | tail -1 || true)
+          if [ -z "${LAST_REV:-}" ]; then
             REV=1
           else
             REV=$((LAST_REV + 1))
           fi
-
+          
           VERSION="${PREFIX}${REV}"
           echo "Next version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
