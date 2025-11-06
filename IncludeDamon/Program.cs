@@ -15,8 +15,6 @@ internal abstract class Program
 {
     private static async Task Main()
     {
-        AppContext.SetSwitch("System.Text.Json.IsReflectionEnabledByDefault", true);
-
         CancellationTokenSource cancellationTokenSource = new();
 
         CancellationToken cancellationToken = cancellationTokenSource.Token;
