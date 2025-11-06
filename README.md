@@ -57,8 +57,8 @@ spec:
                 name: slack-channel
                 key: webhook
         - name: LABEL_SELECTOR_FORMAT
-          value: 'use="{0}"'
+          value: use={0}
         - name: TARGETS
-          value: 'default/daemonset/application1|http://domain.com|/check;default/daemonset/application2|http://api.domain.com|/monitor'
+          value: default/daemonset/application1|http://domain.com|/check;default/daemonset/application2|http://api.domain.com|/monitor
       restartPolicy: Always
 ```

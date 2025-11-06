@@ -901,6 +901,8 @@ internal static class MonitorConfiguration
                 ? segments[3]
                 : Format(CultureInfo.InvariantCulture, labelSelectorFormat, resourceName, namespaceName);
 
+            labelSelector = NormalizeLabelSelector(labelSelector);
+
             string hostHeader = externalBaseUri.IsDefaultPort
                 ? externalBaseUri.Host
                 : $"{externalBaseUri.Host}:{externalBaseUri.Port}";
@@ -935,6 +937,15 @@ internal static class MonitorConfiguration
         return paths.Length == 0
             ? throw new ConfigurationException("Each target must include at least one valid path.")
             : paths;
+    }
+
+    private static string NormalizeLabelSelector(string labelSelector)
+    {
+        string normalized = labelSelector.Replace("\"", Empty).Trim();
+
+        return IsNullOrWhiteSpace(normalized)
+            ? throw new ConfigurationException("Label Selector must resolve to a non-empty value.")
+            : normalized;
     }
 
     private static string NormalizePath(string path)
