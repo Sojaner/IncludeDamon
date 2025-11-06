@@ -21,4 +21,15 @@ RUN dotnet publish IncludeDamon/IncludeDamon.csproj \
 FROM mcr.microsoft.com/dotnet/runtime-deps:8.0
 COPY --from=build /app/out/includedamon /usr/local/bin/includedamon
 RUN chmod +x /usr/local/bin/includedamon
+
+ENV TARGETS=
+ENV SLACK_WEBHOOK_URL=
+ENV DESTROY_FAULTY_PODS=false
+ENV LABEL_SELECTOR_FORMAT=""
+ENV RESPONSE_TIMEOUT_SECONDS=5
+ENV ISSUE_WINDOW_SECONDS=60
+ENV STARTUP_WINDOW_SECONDS=60
+ENV RESOURCE_ISSUE_WINDOW_SECONDS=60
+ENV RESTART_THRESHOLD=60
+
 CMD ["includedamon"]

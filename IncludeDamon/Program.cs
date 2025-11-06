@@ -845,7 +845,7 @@ internal static class MonitorConfiguration
 
     private static MonitorTarget[] ParseTargets(string rawTargets, string labelSelectorFormat)
     {
-        List<MonitorTarget> targets = new();
+        List<MonitorTarget> targets = [];
 
         foreach (string entry in rawTargets.Split(TargetSeparators,
                      StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -887,6 +887,11 @@ internal static class MonitorConfiguration
             string pathsSegment = segments[2];
 
             string[] paths = ParsePaths(pathsSegment);
+
+            if (segments.Length < 4 && IsNullOrWhiteSpace(labelSelectorFormat))
+            {
+                throw new ConfigurationException($"Either a Label Selector for the target '{entry}' or a Label Selector Format must be provided.");
+            }
 
             string labelSelector = segments.Length > 3 && !IsNullOrWhiteSpace(segments[3])
                 ? segments[3]
