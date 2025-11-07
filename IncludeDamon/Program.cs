@@ -1,6 +1,6 @@
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using Humanizer;
 using Humanizer.Bytes;
 using Humanizer.Localisation;
@@ -453,6 +453,14 @@ internal class PodMonitor : IDisposable
 
     private readonly string[] _paths;
 
+    private readonly string _scheme;
+
+    private readonly string _verb;
+
+    private readonly string? _payload;
+
+    private readonly string? _contentType;
+
     private readonly Uri _externalBaseUri;
 
     private volatile bool _disposed;
@@ -476,13 +484,28 @@ internal class PodMonitor : IDisposable
 
         _paths = target.Paths;
 
+        _scheme = target.Scheme;
+
+        _verb = target.Verb;
+
+        _payload = target.Payload;
+
+        _contentType = target.ContentType;
+
         _externalBaseUri = target.ExternalBaseUri;
 
         string hostHeader = target.HostHeader;
 
         _lastPhase = _pod.Status.Phase;
 
-        _client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+        HttpClientHandler httpMessageHandler = new()
+        {
+            AllowAutoRedirect = false,
+
+            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+        };
+
+        _client = new HttpClient(httpMessageHandler)
         {
             Timeout = MonitorConfiguration.ResponseTimeout
         };
@@ -591,11 +614,18 @@ internal class PodMonitor : IDisposable
             return (0, realUrl);
         }
 
-        string url = $"http://{podIp}{path}";
+        string url = $"{_scheme}://{podIp}{path}";
 
         try
         {
-            return ((int)(await _client.GetAsync(url, _cancellationToken)).StatusCode, realUrl);
+            HttpRequestMessage request = new(new HttpMethod(_verb), url);
+
+            if (_verb == "post")
+            {
+                request.Content = new StringContent(_payload!, Encoding.UTF8, _contentType!);
+            }
+
+            return ((int)(await _client.SendAsync(request, _cancellationToken)).StatusCode, realUrl);
         }
         catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException)
         {
@@ -899,8 +929,6 @@ internal static class Extensions
 
 internal sealed class MonitorTarget
 {
-    private string? _labelSelector;
-
     internal MonitorTarget(
         string namespaceName,
         string resourceType,
@@ -909,16 +937,24 @@ internal sealed class MonitorTarget
         string? labelSelector,
         string[] paths,
         Uri externalBaseUri,
-        string hostHeader)
+        string hostHeader,
+        string scheme,
+        string verb,
+        string? payload,
+        string? contentType)
     {
         Namespace = namespaceName;
         ResourceType = resourceType;
         ResourceName = resourceName;
         ResourceKind = resourceKind;
-        _labelSelector = labelSelector;
+        LabelSelector = labelSelector;
         Paths = paths;
         ExternalBaseUri = externalBaseUri;
         HostHeader = hostHeader;
+        Scheme = scheme;
+        Verb = verb;
+        Payload = payload;
+        ContentType = contentType;
     }
 
     public string Namespace { get; }
@@ -929,15 +965,23 @@ internal sealed class MonitorTarget
 
     public MonitorResourceType ResourceKind { get; }
 
-    public string? LabelSelector => _labelSelector;
+    public string? LabelSelector { get; private set; }
 
-    public bool HasLabelSelector => !IsNullOrWhiteSpace(_labelSelector);
+    public bool HasLabelSelector => !IsNullOrWhiteSpace(LabelSelector);
 
     public string[] Paths { get; }
 
     public Uri ExternalBaseUri { get; }
 
     public string HostHeader { get; }
+
+    public string Scheme { get; }
+
+    public string Verb { get; }
+
+    public string? Payload { get; }
+
+    public string? ContentType { get; }
 
     public bool TryUpdateLabelSelector(string? labelSelector)
     {
@@ -946,12 +990,12 @@ internal sealed class MonitorTarget
             return false;
         }
 
-        if (string.Equals(_labelSelector, labelSelector, StringComparison.Ordinal))
+        if (string.Equals(LabelSelector, labelSelector, StringComparison.Ordinal))
         {
             return false;
         }
 
-        _labelSelector = labelSelector;
+        LabelSelector = labelSelector;
 
         return true;
     }
@@ -963,7 +1007,7 @@ internal sealed class MonitorTarget
 
     public static bool TryParseResourceKind(string resourceType, out MonitorResourceType resourceKind)
     {
-        resourceKind = resourceType?.Trim().ToLowerInvariant() switch
+        resourceKind = resourceType.Trim().ToLowerInvariant() switch
         {
             "ds" or "daemonset" or "daemonsets" => MonitorResourceType.DaemonSet,
             "deploy" or "deployment" or "deployments" => MonitorResourceType.Deployment,
@@ -1002,8 +1046,6 @@ internal static class MonitorConfiguration
     {
         string slackWebhookUrl = GetRequiredEnv("SLACK_WEBHOOK_URL");
 
-        string? labelSelectorFormat = Environment.GetEnvironmentVariable("LABEL_SELECTOR_FORMAT");
-
         double responseTimeoutSeconds = GetRequiredDouble("RESPONSE_TIMEOUT_SECONDS");
 
         double issueWindowSeconds = GetRequiredDouble("ISSUE_WINDOW_SECONDS");
@@ -1018,7 +1060,7 @@ internal static class MonitorConfiguration
 
         string rawTargets = GetRequiredEnv("TARGETS");
 
-        MonitorTarget[] targets = ParseTargets(rawTargets, labelSelectorFormat);
+        MonitorTarget[] targets = ParseTargets(rawTargets);
 
         if (targets.Length == 0)
         {
@@ -1037,7 +1079,7 @@ internal static class MonitorConfiguration
             targets);
     }
 
-    private static MonitorTarget[] ParseTargets(string rawTargets, string? labelSelectorFormat)
+    private static MonitorTarget[] ParseTargets(string rawTargets)
     {
         List<MonitorTarget> targets = [];
 
@@ -1046,10 +1088,10 @@ internal static class MonitorConfiguration
         {
             string[] segments = entry.Split('|', StringSplitOptions.TrimEntries);
 
-            if (segments.Length < 3)
+            if (segments.Length < 4)
             {
                 throw new ConfigurationException(
-                    $"Target '{entry}' must have at least three '|' separated segments: resource, host, and paths.");
+                    $"Target '{entry}' must have at least three '|' separated segments: resource, host, paths, and label selector.");
             }
 
             string resourceSegment = segments[0];
@@ -1088,14 +1130,36 @@ internal static class MonitorConfiguration
 
             string[] paths = ParsePaths(pathsSegment);
 
-            string? labelSelector = segments.Length > 3 ? segments[3] : null;
+            string labelSelector = segments[3];
 
-            labelSelector = NormalizeLabelSelector(labelSelector);
+            string scheme = segments.Length >= 5 ? segments[4].TrimEnd(':', '/').ToLower() : externalBaseUri.Scheme;
 
-            if (labelSelector is null && !IsNullOrWhiteSpace(labelSelectorFormat))
+            string verb = "GET";
+
+            string? payload = null;
+
+            string? contentType = null;
+
+            if (segments.Length >= 6)
             {
-                labelSelector = NormalizeLabelSelector(
-                    Format(CultureInfo.InvariantCulture, labelSelectorFormat, resourceName, namespaceName));
+                verb = segments[5].ToLower() switch
+                {
+                    "get" => "get",
+                    "post" => "post",
+                    _ => throw new ConfigurationException(
+                        $"Target '{entry}' has requested the verb '{segments[5]}' which is not supported. Use 'GET' or 'POST'.")
+                };
+
+                if (verb == "post" && segments.Length < 8)
+                {
+                    throw new ConfigurationException($"Target '{entry}' has requested a POST verb but no payload was provided.");
+                }
+                else if (verb == "post" && segments.Length >= 8)
+                {
+                    payload = segments[6];
+
+                    contentType = segments[7];
+                }
             }
 
             string hostHeader = externalBaseUri.IsDefaultPort
@@ -1103,7 +1167,7 @@ internal static class MonitorConfiguration
                 : $"{externalBaseUri.Host}:{externalBaseUri.Port}";
 
             targets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, labelSelector, paths,
-                externalBaseUri, hostHeader));
+                externalBaseUri, hostHeader, scheme, verb, payload, contentType));
         }
 
         return targets.ToArray();
@@ -1132,18 +1196,6 @@ internal static class MonitorConfiguration
         return paths.Length == 0
             ? throw new ConfigurationException("Each target must include at least one valid path.")
             : paths;
-    }
-
-    private static string? NormalizeLabelSelector(string? labelSelector)
-    {
-        if (IsNullOrWhiteSpace(labelSelector))
-        {
-            return null;
-        }
-
-        string normalized = labelSelector.Replace("\"", Empty).Trim();
-
-        return IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private static string NormalizePath(string path)
