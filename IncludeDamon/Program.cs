@@ -618,9 +618,9 @@ internal class PodMonitor : IDisposable
 
         try
         {
-            HttpRequestMessage request = new(new HttpMethod(_verb), url);
+            using HttpRequestMessage request = new(new HttpMethod(_verb), url);
 
-            if (_verb == "post")
+            if (_verb == HttpMethod.Post.Method)
             {
                 request.Content = new StringContent(_payload!, Encoding.UTF8, _contentType!);
             }
@@ -1091,7 +1091,7 @@ internal static class MonitorConfiguration
             if (segments.Length < 4)
             {
                 throw new ConfigurationException(
-                    $"Target '{entry}' must have at least three '|' separated segments: resource, host, paths, and label selector.");
+                    $"Target '{entry}' must have at least four '|' separated segments: resource, host, paths, and label selector.");
             }
 
             string resourceSegment = segments[0];
@@ -1132,33 +1132,67 @@ internal static class MonitorConfiguration
 
             string labelSelector = segments[3];
 
-            string scheme = segments.Length >= 5 ? segments[4].TrimEnd(':', '/').ToLower() : externalBaseUri.Scheme;
+            string scheme = externalBaseUri.Scheme.ToLowerInvariant();
 
-            string verb = "GET";
+            if (segments.Length >= 5 && !IsNullOrWhiteSpace(segments[4]))
+            {
+                string requestedScheme = segments[4].TrimEnd(':', '/').ToLowerInvariant();
+
+                if (IsNullOrWhiteSpace(requestedScheme))
+                {
+                    requestedScheme = scheme;
+                }
+
+                if (requestedScheme is not ("http" or "https"))
+                {
+                    throw new ConfigurationException(
+                        $"Target '{entry}' has requested the scheme '{segments[4]}' which is not supported. Use 'http' or 'https'.");
+                }
+
+                scheme = requestedScheme;
+            }
+
+            string verb = HttpMethod.Get.Method;
 
             string? payload = null;
 
             string? contentType = null;
 
-            if (segments.Length >= 6)
+            if (segments.Length >= 6 && !IsNullOrWhiteSpace(segments[5]))
             {
-                verb = segments[5].ToLower() switch
+                string normalizedVerb = segments[5].Trim().ToUpperInvariant();
+
+                verb = normalizedVerb switch
                 {
-                    "get" => "get",
-                    "post" => "post",
+                    "GET" => HttpMethod.Get.Method,
+                    "POST" => HttpMethod.Post.Method,
                     _ => throw new ConfigurationException(
                         $"Target '{entry}' has requested the verb '{segments[5]}' which is not supported. Use 'GET' or 'POST'.")
                 };
 
-                if (verb == "post" && segments.Length < 8)
+                if (verb == HttpMethod.Post.Method)
                 {
-                    throw new ConfigurationException($"Target '{entry}' has requested a POST verb but no payload was provided.");
-                }
-                else if (verb == "post" && segments.Length >= 8)
-                {
+                    if (segments.Length < 8)
+                    {
+                        throw new ConfigurationException(
+                            $"Target '{entry}' has requested a POST verb but no payload/content type were provided.");
+                    }
+
                     payload = segments[6];
 
                     contentType = segments[7];
+
+                    if (IsNullOrWhiteSpace(payload))
+                    {
+                        throw new ConfigurationException(
+                            $"Target '{entry}' has requested a POST verb but provides an empty payload.");
+                    }
+
+                    if (IsNullOrWhiteSpace(contentType))
+                    {
+                        throw new ConfigurationException(
+                            $"Target '{entry}' has requested a POST verb but provides an empty content type.");
+                    }
                 }
             }
 
