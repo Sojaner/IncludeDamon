@@ -478,6 +478,21 @@ internal class PodMonitor : IDisposable
 
     private readonly Uri _externalBaseUri;
 
+    private static readonly (TimeSpan window, int maxEvents)[] InstabilityThresholds =
+    [
+        (TimeSpan.FromMinutes(10), 3),
+
+        (TimeSpan.FromMinutes(20), 5),
+
+        (TimeSpan.FromMinutes(30), 8),
+
+        (TimeSpan.FromMinutes(45), 12),
+        
+        (TimeSpan.FromMinutes(60), 16)
+    ];
+
+    private readonly List<DateTime> _instabilityEvents = new();
+
     private readonly TimeSpan _issueWindow;
 
     private readonly TimeSpan _startupWindowBase;
@@ -493,6 +508,8 @@ internal class PodMonitor : IDisposable
     private string _lastPhase;
 
     private Status _status;
+
+    private bool _resourceInstabilityRecorded;
 
     public string Name { get; }
 
@@ -684,6 +701,56 @@ internal class PodMonitor : IDisposable
         return new Uri(_externalBaseUri, path).ToString();
     }
 
+    private bool RegisterInstability(string category, out string? forcedReason)
+    {
+        DateTime now = DateTime.UtcNow;
+
+        _instabilityEvents.Add(now);
+
+        TimeSpan longestWindow = InstabilityThresholds.Max(tuple => tuple.window);
+
+        _instabilityEvents.RemoveAll(instant => now - instant > longestWindow);
+
+        foreach ((TimeSpan window, int maxEvents) in InstabilityThresholds)
+        {
+            int count = _instabilityEvents.Count(instant => now - instant <= window);
+
+            if (count > maxEvents)
+            {
+                forcedReason =
+                    $"{category} instability threshold exceeded ({count} events within {window.TotalMinutes} minutes; limit {maxEvents})";
+
+                return true;
+            }
+        }
+
+        forcedReason = null;
+
+        return false;
+    }
+
+    private async Task<bool> MaybeForceRestartForInstability(string category, string resourcesReport)
+    {
+        if (!RegisterInstability(category, out string? reason)) return false;
+
+        bool destroyed = await TrySelfDestructPod(false);
+
+        string logLabel = destroyed
+            ? "[INSTABILITY RESTART]"
+            : "[INSTABILITY DETECTED - DESTRUCTION DISABLED]";
+
+        Console.WriteLine(
+            $"{logLabel} {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}) {reason}{resourcesReport}");
+
+        string message = destroyed
+            ? $"{Icons.Fail} Pod `{_pod.Metadata.Name}` restarted due to repeated instability ({reason}){resourcesReport}"
+            : $"{Icons.Warning} Pod `{_pod.Metadata.Name}` is repeatedly unstable ({reason}) but self-destruction is disabled{resourcesReport}";
+
+        await Program.SendMessage(message);
+
+        return destroyed;
+    }
+
     private async Task<bool> TrySelfDestructPod(bool increaseWaitFactor)
     {
         if (!_shouldDestroyFaultyPods)
@@ -778,7 +845,7 @@ internal class PodMonitor : IDisposable
 
                                 _onStabilized.Invoke(_cancellationToken);
                             }
-                            else if (Status is Status.Problem && _status is Status.Ok or Status.Redeploying)
+                            else if (Status is Status.Problem && _status is Status.Ok or Status.Redeploying or Status.Unknown)
                             {
                                 issueStopwatch.Restart();
 
@@ -798,6 +865,11 @@ internal class PodMonitor : IDisposable
 
                                 await Program.SendMessage(
                                     $"{Icons.Warning} Problem in pod `{_pod.Metadata.Name}` {reason}{resourcesReport}");
+
+                                if (await MaybeForceRestartForInstability("response", resourcesReport))
+                                {
+                                    break;
+                                }
                             }
 
                             if (issueStopwatch.Elapsed >= issueWindow)
@@ -840,10 +912,22 @@ internal class PodMonitor : IDisposable
 
                                 await Program.SendMessage(
                                     $"{Icons.Fire} Pod `{_pod.Metadata.Name}`'s resource usage is over {_restartThreshold:P0} threshold{resourcesReport}");
+
+                                if (!_resourceInstabilityRecorded)
+                                {
+                                    _resourceInstabilityRecorded = true;
+
+                                    if (await MaybeForceRestartForInstability("resource", resourcesReport))
+                                    {
+                                        break;
+                                    }
+                                }
                             }
                             else if (resourceStopwatch.IsRunning && CheckResourcesHealthy(pod))
                             {
                                 resourceStopwatch.Reset();
+
+                                _resourceInstabilityRecorded = false;
 
                                 string resourcesReport = await GetResourcesAsync(pod);
 
