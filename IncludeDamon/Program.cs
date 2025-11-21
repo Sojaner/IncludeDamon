@@ -478,18 +478,11 @@ internal class PodMonitor : IDisposable
 
     private readonly Uri _externalBaseUri;
 
-    private static readonly (TimeSpan window, int maxEvents)[] InstabilityThresholds =
-    [
-        (TimeSpan.FromMinutes(10), 3),
+    private static readonly TimeSpan InstabilityWindow = TimeSpan.FromMinutes(60);
 
-        (TimeSpan.FromMinutes(20), 5),
+    private const double InstabilityRateThresholdPerMinute = 0.12; // ~7 per hour, aligns with previous thresholds
 
-        (TimeSpan.FromMinutes(30), 8),
-
-        (TimeSpan.FromMinutes(45), 12),
-        
-        (TimeSpan.FromMinutes(60), 16)
-    ];
+    private const int MinInstabilityEvents = 3;
 
     private readonly List<DateTime> _instabilityEvents = new();
 
@@ -707,25 +700,31 @@ internal class PodMonitor : IDisposable
 
         _instabilityEvents.Add(now);
 
-        TimeSpan longestWindow = InstabilityThresholds.Max(tuple => tuple.window);
+        _instabilityEvents.RemoveAll(instant => now - instant > InstabilityWindow);
 
-        _instabilityEvents.RemoveAll(instant => now - instant > longestWindow);
-
-        foreach ((TimeSpan window, int maxEvents) in InstabilityThresholds)
+        if (_instabilityEvents.Count < MinInstabilityEvents)
         {
-            int count = _instabilityEvents.Count(instant => now - instant <= window);
+            forcedReason = null;
+            return false;
+        }
 
-            if (count > maxEvents)
-            {
-                forcedReason =
-                    $"{category} instability threshold exceeded ({count} events within {window.TotalMinutes} minutes; limit {maxEvents})";
+        DateTime oldest = _instabilityEvents.Min();
 
-                return true;
-            }
+        TimeSpan span = now - oldest;
+
+        double minutes = Math.Max(span.TotalMinutes, 1);
+
+        double ratePerMinute = _instabilityEvents.Count / minutes;
+
+        if (ratePerMinute > InstabilityRateThresholdPerMinute)
+        {
+            forcedReason =
+                $"{category} instability rate {ratePerMinute:F2}/min over {minutes:F0} minutes (threshold {InstabilityRateThresholdPerMinute:F2}/min)";
+
+            return true;
         }
 
         forcedReason = null;
-
         return false;
     }
 
