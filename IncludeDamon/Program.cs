@@ -167,7 +167,25 @@ internal class Client : IDisposable
 
     private async Task<List<V1Pod>> GetPodsAsync(MonitorTarget target)
     {
-        List<V1Pod> pods = await ListPodsAsync(target.Namespace, target.LabelSelector);
+        string? selector = target.LabelSelector;
+
+        if (IsNullOrWhiteSpace(selector))
+        {
+            selector = ResolveSelectorFromResource(target);
+
+            if (target.TryUpdateLabelSelector(selector))
+            {
+                Console.WriteLine($"[SELECTOR RESOLVED] {target} -> {selector}");
+            }
+        }
+
+        if (IsNullOrWhiteSpace(selector))
+        {
+            Console.WriteLine($"[SELECTOR MISSING] {target} could not determine label selector; skipping pod lookup.");
+            return [];
+        }
+
+        List<V1Pod> pods = await ListPodsAsync(target.Namespace, selector);
 
         if (pods.Count > 0)
         {
@@ -177,7 +195,7 @@ internal class Client : IDisposable
         string? resolvedSelector = ResolveSelectorFromResource(target);
 
         if (!IsNullOrWhiteSpace(resolvedSelector) &&
-            !string.Equals(resolvedSelector, target.LabelSelector, StringComparison.Ordinal))
+            !string.Equals(resolvedSelector, selector, StringComparison.Ordinal))
         {
             if (target.TryUpdateLabelSelector(resolvedSelector))
             {
@@ -189,7 +207,7 @@ internal class Client : IDisposable
 
         if (pods.Count == 0)
         {
-            Console.WriteLine($"[NO PODS FOUND] {target} using selector '{target.LabelSelector ?? "<none>"}'");
+            Console.WriteLine($"[NO PODS FOUND] {target} using selector '{target.LabelSelector ?? selector}'");
         }
 
         return pods;
@@ -1146,12 +1164,6 @@ internal static class MonitorConfiguration
             string[] paths = ParsePaths(dto.Paths);
 
             string? labelSelector = NormalizeLabelSelector(dto.LabelSelector);
-
-            if (labelSelector is null)
-            {
-                throw new ConfigurationException(
-                    $"Target '{targetLabel}' must provide a non-empty 'labelSelector'.");
-            }
 
             string scheme = NormalizeScheme(dto.Scheme ?? externalBaseUri.Scheme);
 

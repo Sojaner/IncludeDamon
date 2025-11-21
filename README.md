@@ -64,13 +64,7 @@ spec:
                 "resourceType": "daemonset",
                 "resourceName": "application1",
                 "host": "https://domain.com",
-                "paths": ["/check", "/monitor"],
-                "labelSelector": "run=application1",
-                "scheme": "https",
-                "verb": "POST",
-                "payload": "{\"something\":\"value\"}",
-                "contentType": "application/json",
-                "timeoutSeconds": 10
+                "paths": ["/check", "/monitor"]
               },
               {
                 "namespace": "default",
@@ -78,25 +72,22 @@ spec:
                 "resourceName": "application2",
                 "host": "https://api.domain.com",
                 "paths": ["/monitor"],
-                "timeoutSeconds": 5,
-                "labelSelector": "run=application2"
+                "timeoutSeconds": 5
               },
               {
                 "namespace": "default",
                 "resourceType": "daemonset",
                 "resourceName": "application3",
-                "host": "https://data.domain.com",
-                "paths": ["/check"],
-                "labelSelector": "use=application3"
+                "host": "https://data.domain.com"
               }
             ]
       restartPolicy: Always
 ```
 
-`TARGETS` is now a JSON array; each entry must include `namespace`, `resourceType`
-(daemonset/deployment), `resourceName`, and `host`. Optional fields:
-`paths` (defaults to `["/"]`), `labelSelector` (required; no global format and no workload fallback),
-spec selector), `scheme` (`http`/`https`, defaults to the host's scheme), `verb` (`GET`/`POST`),
+`TARGETS` is now a JSON array; each entry must include `namespace`, `resourceType` (daemonset/deployment), `resourceName`, and `host`.
+Optional fields:
+`paths` (defaults to `["/"]`), `labelSelector` (optional; auto-detected from the workload's selector when omitted),
+`scheme` (`http`/`https`, defaults to the host's scheme), `verb` (`GET`/`POST`),
 `payload`/`contentType` (required when `verb` is `POST`), `timeoutSeconds` (defaults to `5`),
 `hostHeader` (defaults to host[:port]), `issueWindowSeconds` (defaults to `60`),
 `startupWindowSeconds` (defaults to `120`), `resourceIssueWindowSeconds` (defaults to `300`),
