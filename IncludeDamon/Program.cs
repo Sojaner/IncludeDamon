@@ -1,5 +1,7 @@
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Json;
 using System.Text;
 using Humanizer;
 using Humanizer.Bytes;
@@ -463,6 +465,16 @@ internal class PodMonitor : IDisposable
 
     private readonly Uri _externalBaseUri;
 
+    private readonly TimeSpan _issueWindow;
+
+    private readonly TimeSpan _startupWindowBase;
+
+    private readonly TimeSpan _resourceIssueWindow;
+
+    private readonly double _restartThreshold;
+
+    private readonly bool _shouldDestroyFaultyPods;
+
     private volatile bool _disposed;
 
     private string _lastPhase;
@@ -494,6 +506,16 @@ internal class PodMonitor : IDisposable
 
         _externalBaseUri = target.ExternalBaseUri;
 
+        _issueWindow = target.IssueWindow;
+
+        _startupWindowBase = target.StartupWindow;
+
+        _resourceIssueWindow = target.ResourceIssueWindow;
+
+        _restartThreshold = target.RestartThreshold;
+
+        _shouldDestroyFaultyPods = target.ShouldDestroyFaultyPods;
+
         string hostHeader = target.HostHeader;
 
         _lastPhase = _pod.Status.Phase;
@@ -507,7 +529,7 @@ internal class PodMonitor : IDisposable
 
         _client = new HttpClient(httpMessageHandler)
         {
-            Timeout = MonitorConfiguration.ResponseTimeout
+            Timeout = target.ResponseTimeout
         };
 
         _client.DefaultRequestHeaders.Host = hostHeader;
@@ -551,9 +573,7 @@ internal class PodMonitor : IDisposable
 
             double memoryLimit = limits["memory"].ToDouble();
 
-            double restartThreshold = MonitorConfiguration.RestartThreshold;
-
-            return cpuUsage / cpuLimit < restartThreshold && memoryUsage / memoryLimit < restartThreshold;
+            return cpuUsage / cpuLimit < _restartThreshold && memoryUsage / memoryLimit < _restartThreshold;
         }
         catch
         {
@@ -653,7 +673,7 @@ internal class PodMonitor : IDisposable
 
     private async Task<bool> TrySelfDestructPod(bool increaseWaitFactor)
     {
-        if (!MonitorConfiguration.ShouldDestroyFaultyPods)
+        if (!_shouldDestroyFaultyPods)
         {
             Console.WriteLine($"[SELF DESTRUCT SKIPPED] {_pod.Metadata.Name}");
 
@@ -677,15 +697,11 @@ internal class PodMonitor : IDisposable
                 Console.WriteLine(
                     $"[MONITOR STARTED] {_pod.Metadata.Name} (up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)})");
 
-                TimeSpan issueWindow = MonitorConfiguration.IssueWindow;
+                TimeSpan issueWindow = _issueWindow;
 
-                TimeSpan startupWindowBase = MonitorConfiguration.StartupWindow;
+                TimeSpan startupWindow = TimeSpan.FromTicks((long)(_startupWindowBase.Ticks * _waitFactor));
 
-                TimeSpan startupWindow = TimeSpan.FromTicks((long)(startupWindowBase.Ticks * _waitFactor));
-
-                TimeSpan resourceIssueWindow = MonitorConfiguration.ResourceIssueWindow;
-
-                double restartThreshold = MonitorConfiguration.RestartThreshold;
+                TimeSpan resourceIssueWindow = _resourceIssueWindow;
 
                 Stopwatch startupStopwatch = new();
 
@@ -810,7 +826,7 @@ internal class PodMonitor : IDisposable
                                     $"[MONITOR RESOURCE FAULTY] {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
 
                                 await Program.SendMessage(
-                                    $"{Icons.Fire} Pod `{_pod.Metadata.Name}`'s resource usage is over {restartThreshold:P0} threshold{resourcesReport}");
+                                    $"{Icons.Fire} Pod `{_pod.Metadata.Name}`'s resource usage is over {_restartThreshold:P0} threshold{resourcesReport}");
                             }
                             else if (resourceStopwatch.IsRunning && CheckResourcesHealthy(pod))
                             {
@@ -929,6 +945,13 @@ internal static class Extensions
 
 internal sealed class MonitorTarget
 {
+    internal static readonly TimeSpan DefaultResponseTimeout = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan DefaultIssueWindow = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan DefaultStartupWindow = TimeSpan.FromSeconds(120);
+    internal static readonly TimeSpan DefaultResourceIssueWindow = TimeSpan.FromSeconds(300);
+    internal const double DefaultRestartThreshold = 0.9;
+    internal const bool DefaultShouldDestroyFaultyPods = false;
+
     internal MonitorTarget(
         string namespaceName,
         string resourceType,
@@ -941,7 +964,13 @@ internal sealed class MonitorTarget
         string scheme,
         string verb,
         string? payload,
-        string? contentType)
+        string? contentType,
+        TimeSpan responseTimeout,
+        TimeSpan issueWindow,
+        TimeSpan startupWindow,
+        TimeSpan resourceIssueWindow,
+        double restartThreshold,
+        bool shouldDestroyFaultyPods)
     {
         Namespace = namespaceName;
         ResourceType = resourceType;
@@ -955,6 +984,12 @@ internal sealed class MonitorTarget
         Verb = verb;
         Payload = payload;
         ContentType = contentType;
+        ResponseTimeout = responseTimeout;
+        IssueWindow = issueWindow;
+        StartupWindow = startupWindow;
+        ResourceIssueWindow = resourceIssueWindow;
+        RestartThreshold = restartThreshold;
+        ShouldDestroyFaultyPods = shouldDestroyFaultyPods;
     }
 
     public string Namespace { get; }
@@ -982,6 +1017,18 @@ internal sealed class MonitorTarget
     public string? Payload { get; }
 
     public string? ContentType { get; }
+
+    public TimeSpan ResponseTimeout { get; }
+
+    public TimeSpan IssueWindow { get; }
+
+    public TimeSpan StartupWindow { get; }
+
+    public TimeSpan ResourceIssueWindow { get; }
+
+    public double RestartThreshold { get; }
+
+    public bool ShouldDestroyFaultyPods { get; }
 
     public bool TryUpdateLabelSelector(string? labelSelector)
     {
@@ -1022,41 +1069,20 @@ internal static class MonitorConfiguration
 {
     private static readonly Lazy<MonitorSettings> Settings = new(LoadSettings);
 
-    private static readonly char[] TargetSeparators = [';', '\n'];
-
-    private static readonly char[] PathSeparators = [','];
+    private static readonly JsonSerializerOptions TargetJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true
+    };
 
     public static string SlackWebhookUrl => Settings.Value.SlackWebhookUrl;
 
     public static MonitorTarget[] Targets => Settings.Value.Targets;
 
-    public static TimeSpan ResponseTimeout => Settings.Value.ResponseTimeout;
-
-    public static TimeSpan IssueWindow => Settings.Value.IssueWindow;
-
-    public static TimeSpan StartupWindow => Settings.Value.StartupWindow;
-
-    public static TimeSpan ResourceIssueWindow => Settings.Value.ResourceIssueWindow;
-
-    public static double RestartThreshold => Settings.Value.RestartThreshold;
-
-    public static bool ShouldDestroyFaultyPods => Settings.Value.ShouldDestroyFaultyPods;
-
     private static MonitorSettings LoadSettings()
     {
         string slackWebhookUrl = GetRequiredEnv("SLACK_WEBHOOK_URL");
-
-        double responseTimeoutSeconds = GetRequiredDouble("RESPONSE_TIMEOUT_SECONDS");
-
-        double issueWindowSeconds = GetRequiredDouble("ISSUE_WINDOW_SECONDS");
-
-        double startupWindowSeconds = GetRequiredDouble("STARTUP_WINDOW_SECONDS");
-
-        double resourceIssueWindowSeconds = GetRequiredDouble("RESOURCE_ISSUE_WINDOW_SECONDS");
-
-        double restartThreshold = GetRequiredDouble("RESTART_THRESHOLD");
-
-        bool shouldDestroyFaultyPods = GetRequiredBool("DESTROY_FAULTY_PODS");
 
         string rawTargets = GetRequiredEnv("TARGETS");
 
@@ -1070,141 +1096,154 @@ internal static class MonitorConfiguration
 
         return new MonitorSettings(
             slackWebhookUrl,
-            TimeSpan.FromSeconds(responseTimeoutSeconds),
-            TimeSpan.FromSeconds(issueWindowSeconds),
-            TimeSpan.FromSeconds(startupWindowSeconds),
-            TimeSpan.FromSeconds(resourceIssueWindowSeconds),
-            restartThreshold,
-            shouldDestroyFaultyPods,
             targets);
     }
 
     private static MonitorTarget[] ParseTargets(string rawTargets)
     {
+        TargetDto[]? targetDtos;
+
+        try
+        {
+            targetDtos = JsonSerializer.Deserialize<TargetDto[]>(rawTargets, TargetJsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            throw new ConfigurationException(
+                $"Environment variable 'TARGETS' must be valid JSON describing an array of targets. {ex.Message}");
+        }
+
+        if (targetDtos is null || targetDtos.Length == 0)
+        {
+            throw new ConfigurationException(
+                "Environment variable 'TARGETS' must contain at least one target definition.");
+        }
+
         List<MonitorTarget> targets = [];
 
-        foreach (string entry in rawTargets.Split(TargetSeparators,
-                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        for (int i = 0; i < targetDtos.Length; i++)
         {
-            string[] segments = entry.Split('|', StringSplitOptions.TrimEntries);
+            TargetDto dto = targetDtos[i];
 
-            if (segments.Length < 4)
-            {
-                throw new ConfigurationException(
-                    $"Target '{entry}' must have at least four '|' separated segments: resource, host, paths, and label selector.");
-            }
+            string targetLabel = !IsNullOrWhiteSpace(dto.ResourceName)
+                ? dto.ResourceName!
+                : $"index {i}";
 
-            string resourceSegment = segments[0];
+            string namespaceName = RequireValue(dto.Namespace, "namespace", targetLabel);
 
-            string[] resourceParts = resourceSegment.Split('/',
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            string resourceType = RequireValue(dto.ResourceType, "resourceType", targetLabel);
 
-            if (resourceParts.Length != 3)
-            {
-                throw new ConfigurationException(
-                    $"Resource descriptor '{resourceSegment}' must follow 'namespace/resourceType/resourceName' format.");
-            }
-
-            string namespaceName = resourceParts[0];
-
-            string resourceType = resourceParts[1];
-
-            string resourceName = resourceParts[2];
+            string resourceName = RequireValue(dto.ResourceName, "resourceName", targetLabel);
 
             if (!MonitorTarget.TryParseResourceKind(resourceType, out MonitorResourceType resourceKind))
             {
                 throw new ConfigurationException(
-                    $"Resource type '{resourceType}' for target '{entry}' is not supported. Use 'daemonset' or 'deployment'.");
+                    $"Resource type '{resourceType}' for target '{targetLabel}' is not supported. Use 'daemonset' or 'deployment'.");
             }
 
-            string hostSegment = segments[1];
+            Uri externalBaseUri = ParseHost(RequireValue(dto.Host, "host", targetLabel));
 
-            if (IsNullOrWhiteSpace(hostSegment))
+            string[] paths = ParsePaths(dto.Paths);
+
+            string? labelSelector = NormalizeLabelSelector(dto.LabelSelector);
+
+            if (labelSelector is null)
             {
-                throw new ConfigurationException($"Target '{entry}' must include a host segment.");
+                throw new ConfigurationException(
+                    $"Target '{targetLabel}' must provide a non-empty 'labelSelector'.");
             }
 
-            Uri externalBaseUri = ParseHost(hostSegment);
+            string scheme = NormalizeScheme(dto.Scheme ?? externalBaseUri.Scheme);
 
-            string pathsSegment = segments[2];
+            string verb = NormalizeVerb(dto.Verb);
 
-            string[] paths = ParsePaths(pathsSegment);
+            string? payload = dto.Payload;
+            string? contentType = dto.ContentType;
 
-            string labelSelector = segments[3];
-
-            string scheme = externalBaseUri.Scheme.ToLowerInvariant();
-
-            if (segments.Length >= 5 && !IsNullOrWhiteSpace(segments[4]))
+            if (verb == HttpMethod.Post.Method)
             {
-                string requestedScheme = segments[4].TrimEnd(':', '/').ToLowerInvariant();
-
-                if (IsNullOrWhiteSpace(requestedScheme))
-                {
-                    requestedScheme = scheme;
-                }
-
-                if (requestedScheme is not ("http" or "https"))
+                if (IsNullOrWhiteSpace(payload))
                 {
                     throw new ConfigurationException(
-                        $"Target '{entry}' has requested the scheme '{segments[4]}' which is not supported. Use 'http' or 'https'.");
+                        $"Target '{targetLabel}' requires a 'payload' when using POST.");
                 }
 
-                scheme = requestedScheme;
+                if (IsNullOrWhiteSpace(contentType))
+                {
+                    throw new ConfigurationException(
+                        $"Target '{targetLabel}' requires a 'contentType' when using POST.");
+                }
             }
-
-            string verb = HttpMethod.Get.Method;
-
-            string? payload = null;
-
-            string? contentType = null;
-
-            if (segments.Length >= 6 && !IsNullOrWhiteSpace(segments[5]))
+            else
             {
-                string normalizedVerb = segments[5].Trim().ToUpperInvariant();
-
-                verb = normalizedVerb switch
-                {
-                    "GET" => HttpMethod.Get.Method,
-                    "POST" => HttpMethod.Post.Method,
-                    _ => throw new ConfigurationException(
-                        $"Target '{entry}' has requested the verb '{segments[5]}' which is not supported. Use 'GET' or 'POST'.")
-                };
-
-                if (verb == HttpMethod.Post.Method)
-                {
-                    if (segments.Length < 8)
-                    {
-                        throw new ConfigurationException(
-                            $"Target '{entry}' has requested a POST verb but no payload/content type were provided.");
-                    }
-
-                    payload = segments[6];
-
-                    contentType = segments[7];
-
-                    if (IsNullOrWhiteSpace(payload))
-                    {
-                        throw new ConfigurationException(
-                            $"Target '{entry}' has requested a POST verb but provides an empty payload.");
-                    }
-
-                    if (IsNullOrWhiteSpace(contentType))
-                    {
-                        throw new ConfigurationException(
-                            $"Target '{entry}' has requested a POST verb but provides an empty content type.");
-                    }
-                }
+                payload = null;
+                contentType = null;
             }
 
-            string hostHeader = externalBaseUri.IsDefaultPort
-                ? externalBaseUri.Host
-                : $"{externalBaseUri.Host}:{externalBaseUri.Port}";
+            TimeSpan responseTimeout = dto.TimeoutSeconds is > 0
+                ? TimeSpan.FromSeconds(dto.TimeoutSeconds!.Value)
+                : MonitorTarget.DefaultResponseTimeout;
+
+            TimeSpan issueWindow = dto.IssueWindowSeconds is > 0
+                ? TimeSpan.FromSeconds(dto.IssueWindowSeconds!.Value)
+                : MonitorTarget.DefaultIssueWindow;
+
+            TimeSpan startupWindow = dto.StartupWindowSeconds is > 0
+                ? TimeSpan.FromSeconds(dto.StartupWindowSeconds!.Value)
+                : MonitorTarget.DefaultStartupWindow;
+
+            TimeSpan resourceIssueWindow = dto.ResourceIssueWindowSeconds is > 0
+                ? TimeSpan.FromSeconds(dto.ResourceIssueWindowSeconds!.Value)
+                : MonitorTarget.DefaultResourceIssueWindow;
+
+            double restartThreshold = dto.RestartThreshold is > 0
+                ? dto.RestartThreshold!.Value
+                : MonitorTarget.DefaultRestartThreshold;
+
+            bool shouldDestroyFaultyPods = dto.DestroyFaultyPods ?? MonitorTarget.DefaultShouldDestroyFaultyPods;
+
+            string hostHeader = !IsNullOrWhiteSpace(dto.HostHeader)
+                ? dto.HostHeader!
+                : externalBaseUri.IsDefaultPort
+                    ? externalBaseUri.Host
+                    : $"{externalBaseUri.Host}:{externalBaseUri.Port}";
 
             targets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, labelSelector, paths,
-                externalBaseUri, hostHeader, scheme, verb, payload, contentType));
+                externalBaseUri, hostHeader, scheme, verb, payload, contentType, responseTimeout, issueWindow,
+                startupWindow, resourceIssueWindow, restartThreshold, shouldDestroyFaultyPods));
         }
 
         return targets.ToArray();
+    }
+
+    private static string NormalizeScheme(string? scheme)
+    {
+        string normalized = (scheme ?? "").Trim().TrimEnd(':', '/').ToLowerInvariant();
+
+        if (IsNullOrWhiteSpace(normalized))
+        {
+            return "http";
+        }
+
+        return normalized switch
+        {
+            "http" or "https" => normalized,
+            _ => throw new ConfigurationException(
+                $"Unsupported scheme '{scheme}'. Only 'http' or 'https' are allowed.")
+        };
+    }
+
+    private static string NormalizeVerb(string? verb)
+    {
+        string normalized = (verb ?? HttpMethod.Get.Method).Trim().ToUpperInvariant();
+
+        return normalized switch
+        {
+            "" or "GET" => HttpMethod.Get.Method,
+            "POST" => HttpMethod.Post.Method,
+            _ => throw new ConfigurationException(
+                $"Unsupported HTTP verb '{verb}'. Only GET and POST are allowed.")
+        };
     }
 
     private static Uri ParseHost(string hostSegment)
@@ -1215,26 +1254,81 @@ internal static class MonitorConfiguration
             : uri;
     }
 
-    private static string[] ParsePaths(string pathsSegment)
+    private static string[] ParsePaths(string[]? paths)
     {
-        if (IsNullOrWhiteSpace(pathsSegment))
+        if (paths is null || paths.Length == 0)
         {
-            throw new ConfigurationException("Each target must include at least one path.");
+            return ["/"];
         }
 
-        string[] paths = pathsSegment
-            .Split(PathSeparators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        string[] normalized = paths
+            .Select(path => path ?? "")
             .Select(NormalizePath)
+            .Where(path => !IsNullOrWhiteSpace(path))
             .ToArray();
 
-        return paths.Length == 0
-            ? throw new ConfigurationException("Each target must include at least one valid path.")
-            : paths;
+        return normalized.Length == 0 ? ["/"] : normalized;
     }
 
     private static string NormalizePath(string path)
     {
         return !path.StartsWith('/') ? $"/{path}" : path;
+    }
+
+    private static string? NormalizeLabelSelector(string? labelSelector)
+    {
+        if (IsNullOrWhiteSpace(labelSelector))
+        {
+            return null;
+        }
+
+        string normalized = labelSelector.Replace("\"", Empty).Trim();
+
+        return IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static string RequireValue(string? value, string propertyName, string targetLabel)
+    {
+        return IsNullOrWhiteSpace(value)
+            ? throw new ConfigurationException($"Target '{targetLabel}' must specify '{propertyName}'.")
+            : value;
+    }
+
+    private sealed class TargetDto
+    {
+        public string? Namespace { get; set; }
+
+        public string? ResourceType { get; set; }
+
+        public string? ResourceName { get; set; }
+
+        public string? Host { get; set; }
+
+        public string[]? Paths { get; set; }
+
+        public string? LabelSelector { get; set; }
+
+        public string? HostHeader { get; set; }
+
+        public string? Scheme { get; set; }
+
+        public string? Verb { get; set; }
+
+        public string? Payload { get; set; }
+
+        public string? ContentType { get; set; }
+
+        public double? TimeoutSeconds { get; set; }
+
+        public double? IssueWindowSeconds { get; set; }
+
+        public double? StartupWindowSeconds { get; set; }
+
+        public double? ResourceIssueWindowSeconds { get; set; }
+
+        public double? RestartThreshold { get; set; }
+
+        public bool? DestroyFaultyPods { get; set; }
     }
 
     private static string GetRequiredEnv(string key)
@@ -1246,41 +1340,8 @@ internal static class MonitorConfiguration
             : value;
     }
 
-    private static double GetRequiredDouble(string key)
-    {
-        string value = GetRequiredEnv(key);
-
-        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
-            ? parsed
-            : throw new ConfigurationException($"Environment variable '{key}' must be a numeric value.");
-    }
-
-    private static bool GetRequiredBool(string key)
-    {
-        string value = GetRequiredEnv(key);
-
-        if (bool.TryParse(value, out bool parsedBool))
-        {
-            return parsedBool;
-        }
-
-        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedInt) &&
-            parsedInt is 0 or 1)
-        {
-            return parsedInt != 0;
-        }
-
-        throw new ConfigurationException(
-            $"Environment variable '{key}' must be a boolean value (true/false or 0/1).");
-    }
 }
 
 internal sealed record MonitorSettings(
     string SlackWebhookUrl,
-    TimeSpan ResponseTimeout,
-    TimeSpan IssueWindow,
-    TimeSpan StartupWindow,
-    TimeSpan ResourceIssueWindow,
-    double RestartThreshold,
-    bool ShouldDestroyFaultyPods,
     MonitorTarget[] Targets);
