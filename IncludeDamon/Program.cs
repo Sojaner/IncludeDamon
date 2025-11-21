@@ -287,11 +287,6 @@ internal class Client : IDisposable
 
     private void TryUpdateLabelSelectorFromResource(MonitorTarget target, V1LabelSelector? selector)
     {
-        if (target.HasLabelSelector)
-        {
-            return;
-        }
-
         string? resolvedSelector = BuildSelectorString(selector);
 
         if (target.TryUpdateLabelSelector(resolvedSelector))
@@ -975,7 +970,6 @@ internal sealed class MonitorTarget
         string resourceType,
         string resourceName,
         MonitorResourceType resourceKind,
-        string? labelSelector,
         string[] paths,
         Uri externalBaseUri,
         string hostHeader,
@@ -994,7 +988,7 @@ internal sealed class MonitorTarget
         ResourceType = resourceType;
         ResourceName = resourceName;
         ResourceKind = resourceKind;
-        LabelSelector = labelSelector;
+        LabelSelector = null;
         Paths = paths;
         ExternalBaseUri = externalBaseUri;
         HostHeader = hostHeader;
@@ -1019,8 +1013,6 @@ internal sealed class MonitorTarget
     public MonitorResourceType ResourceKind { get; }
 
     public string? LabelSelector { get; private set; }
-
-    public bool HasLabelSelector => !IsNullOrWhiteSpace(LabelSelector);
 
     public string[] Paths { get; }
 
@@ -1163,8 +1155,6 @@ internal static class MonitorConfiguration
 
             string[] paths = ParsePaths(dto.Paths);
 
-            string? labelSelector = NormalizeLabelSelector(dto.LabelSelector);
-
             string scheme = NormalizeScheme(dto.Scheme ?? externalBaseUri.Scheme);
 
             string verb = NormalizeVerb(dto.Verb);
@@ -1220,7 +1210,7 @@ internal static class MonitorConfiguration
                     ? externalBaseUri.Host
                     : $"{externalBaseUri.Host}:{externalBaseUri.Port}";
 
-            targets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, labelSelector, paths,
+            targets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, paths,
                 externalBaseUri, hostHeader, scheme, verb, payload, contentType, responseTimeout, issueWindow,
                 startupWindow, resourceIssueWindow, restartThreshold, shouldDestroyFaultyPods));
         }
@@ -1287,18 +1277,6 @@ internal static class MonitorConfiguration
         return !path.StartsWith('/') ? $"/{path}" : path;
     }
 
-    private static string? NormalizeLabelSelector(string? labelSelector)
-    {
-        if (IsNullOrWhiteSpace(labelSelector))
-        {
-            return null;
-        }
-
-        string normalized = labelSelector.Replace("\"", Empty).Trim();
-
-        return IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
-
     private static string RequireValue(string? value, string propertyName, string targetLabel)
     {
         return IsNullOrWhiteSpace(value)
@@ -1317,8 +1295,6 @@ internal static class MonitorConfiguration
         public string? Host { get; set; }
 
         public string[]? Paths { get; set; }
-
-        public string? LabelSelector { get; set; }
 
         public string? HostHeader { get; set; }
 
