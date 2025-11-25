@@ -13,7 +13,7 @@ public class Service: BackgroundService
 {
     private readonly HttpClient _httpClient = new();
 
-    private readonly Kubernetes _kubernetes = new(KubernetesClientConfiguration.InClusterConfig());
+    private readonly Kubernetes _kubernetes = new(Utilities.Utilities.CreateKubernetesClientConfiguration());
 
     private readonly Lock _removeLock = new();
 
