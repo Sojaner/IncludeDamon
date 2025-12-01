@@ -1,5 +1,5 @@
 # Build stage
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # copy csproj and restore first for better layer caching
@@ -17,7 +17,7 @@ RUN dotnet publish IncludeDamon/IncludeDamon.csproj \
     -o /app/out
 
 # Runtime stage
-FROM mcr.microsoft.com/dotnet/runtime-deps:8.0
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0
 COPY --from=build /app/out/includedamon /usr/local/bin/includedamon
 RUN chmod +x /usr/local/bin/includedamon
 
