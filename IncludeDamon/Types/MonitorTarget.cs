@@ -10,6 +10,7 @@ internal sealed class MonitorTarget
     internal static readonly TimeSpan DefaultResourceIssueWindow = TimeSpan.FromSeconds(300);
     internal const double DefaultRestartThreshold = 0.9;
     internal const bool DefaultShouldDestroyFaultyPods = false;
+    internal const bool DefaultLogNotDestroying = false;
 
     internal MonitorTarget(
         string namespaceName,
@@ -28,7 +29,8 @@ internal sealed class MonitorTarget
         TimeSpan startupWindow,
         TimeSpan resourceIssueWindow,
         double restartThreshold,
-        bool shouldDestroyFaultyPods)
+        bool shouldDestroyFaultyPods,
+        bool logNotDestroying)
     {
         Namespace = namespaceName;
         ResourceType = resourceType;
@@ -48,6 +50,7 @@ internal sealed class MonitorTarget
         ResourceIssueWindow = resourceIssueWindow;
         RestartThreshold = restartThreshold;
         ShouldDestroyFaultyPods = shouldDestroyFaultyPods;
+        LogNotDestroying = logNotDestroying;
     }
 
     public string Namespace { get; }
@@ -85,6 +88,8 @@ internal sealed class MonitorTarget
     public double RestartThreshold { get; }
 
     public bool ShouldDestroyFaultyPods { get; }
+
+    public bool LogNotDestroying { get; }
 
     public bool TryUpdateLabelSelector(string? labelSelector)
     {

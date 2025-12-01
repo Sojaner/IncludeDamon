@@ -60,6 +60,8 @@ internal class PodMonitor : IDisposable
 
     private readonly bool _shouldDestroyFaultyPods;
 
+    private readonly bool _logNotDestroying;
+
     private volatile bool _disposed;
 
     private string _lastPhase;
@@ -102,6 +104,8 @@ internal class PodMonitor : IDisposable
         _restartThreshold = target.RestartThreshold;
 
         _shouldDestroyFaultyPods = target.ShouldDestroyFaultyPods;
+
+        _logNotDestroying = target.LogNotDestroying;
 
         string hostHeader = target.HostHeader;
 
@@ -298,18 +302,23 @@ internal class PodMonitor : IDisposable
 
         bool destroyed = await TrySelfDestructPod(false);
 
-        string logLabel = destroyed
-            ? "[INSTABILITY RESTART]"
-            : "[INSTABILITY DETECTED - DESTRUCTION DISABLED]";
+        bool log = destroyed || _logNotDestroying;
 
-        Console.WriteLine(
-            $"{logLabel} {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}) {reason}{resourcesReport}");
+        if (log)
+        {
+            string logLabel = destroyed
+                ? "[INSTABILITY RESTART]"
+                : "[INSTABILITY DETECTED - DESTRUCTION DISABLED]";
 
-        string message = destroyed
-            ? $"{Icons.Fail} Pod `{_pod.Metadata.Name}` restarted due to repeated instability ({reason}){resourcesReport}"
-            : $"{Icons.Warning} Pod `{_pod.Metadata.Name}` is repeatedly unstable ({reason}) but self-destruction is disabled{resourcesReport}";
+            Console.WriteLine(
+                $"{logLabel} {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}) {reason}{resourcesReport}");
 
-        await _sendMessage(message);
+            string message = destroyed
+                ? $"{Icons.Fail} Pod `{_pod.Metadata.Name}` restarted due to repeated instability ({reason}){resourcesReport}"
+                : $"{Icons.Warning} Pod `{_pod.Metadata.Name}` is repeatedly unstable ({reason}) but self-destruction is disabled{resourcesReport}";
+
+            await _sendMessage(message);
+        }
 
         return destroyed;
     }

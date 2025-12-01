@@ -124,6 +124,8 @@ internal static class MonitorConfiguration
 
             bool shouldDestroyFaultyPods = dto.DestroyFaultyPods ?? MonitorTarget.DefaultShouldDestroyFaultyPods;
 
+            bool logNotDestroying = dto.LogNotDestroying ?? MonitorTarget.DefaultLogNotDestroying;
+
             string hostHeader = !IsNullOrWhiteSpace(dto.HostHeader)
                 ? dto.HostHeader!
                 : externalBaseUri.IsDefaultPort
@@ -132,7 +134,7 @@ internal static class MonitorConfiguration
 
             monitorTargets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, paths,
                 externalBaseUri, hostHeader, scheme, verb, payload, contentType, responseTimeout, issueWindow,
-                startupWindow, resourceIssueWindow, restartThreshold, shouldDestroyFaultyPods));
+                startupWindow, resourceIssueWindow, restartThreshold, shouldDestroyFaultyPods, logNotDestroying));
         }
 
         return monitorTargets.ToArray();
