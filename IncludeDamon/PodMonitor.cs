@@ -446,18 +446,23 @@ internal class PodMonitor : IDisposable
 
                                 bool destroyed = await TrySelfDestructPod(startupStopwatch.IsRunning);
 
-                                string logLabel = destroyed
-                                    ? "[MONITOR RESPONSE RESTARTED]"
-                                    : "[MONITOR RESPONSE FAULTY - DESTRUCTION DISABLED]";
+                                bool log = destroyed || _logNotDestroying;
 
-                                Console.WriteLine(
-                                    $"{logLabel} {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
+                                if (log)
+                                {
+                                    string logLabel = destroyed
+                                        ? "[MONITOR RESPONSE RESTARTED]"
+                                        : "[MONITOR RESPONSE FAULTY - DESTRUCTION DISABLED]";
 
-                                string message = destroyed
-                                    ? $"{Icons.Fail} Pod `{_pod.Metadata.Name}` restarted due to connection problems{resourcesReport}"
-                                    : $"{Icons.Warning} Pod `{_pod.Metadata.Name}` has connection problems but self-destruction is disabled{resourcesReport}";
+                                    Console.WriteLine(
+                                        $"{logLabel} {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
 
-                                await _sendMessage(message);
+                                    string message = destroyed
+                                        ? $"{Icons.Fail} Pod `{_pod.Metadata.Name}` restarted due to connection problems{resourcesReport}"
+                                        : $"{Icons.Warning} Pod `{_pod.Metadata.Name}` has connection problems but self-destruction is disabled{resourcesReport}";
+
+                                    await _sendMessage(message);
+                                }
 
                                 if (destroyed)
                                 {
@@ -512,18 +517,23 @@ internal class PodMonitor : IDisposable
 
                                 bool destroyed = await TrySelfDestructPod(false);
 
-                                string logLabel = destroyed
-                                    ? "[MONITOR RESOURCE RESTARTED]"
-                                    : "[MONITOR RESOURCE FAULTY - DESTRUCTION DISABLED]";
+                                bool log = destroyed || _logNotDestroying;
 
-                                Console.WriteLine(
-                                    $"{logLabel} {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
+                                if (log)
+                                {
+                                    string logLabel = destroyed
+                                        ? "[MONITOR RESOURCE RESTARTED]"
+                                        : "[MONITOR RESOURCE FAULTY - DESTRUCTION DISABLED]";
 
-                                string message = destroyed
-                                    ? $"{Icons.Fail} Pod `{_pod.Metadata.Name}` restarted due to high resource usage{resourcesReport}"
-                                    : $"{Icons.Warning} Pod `{_pod.Metadata.Name}` has high resource usage but self-destruction is disabled{resourcesReport}";
+                                    Console.WriteLine(
+                                        $"{logLabel} {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
 
-                                await _sendMessage(message);
+                                    string message = destroyed
+                                        ? $"{Icons.Fail} Pod `{_pod.Metadata.Name}` restarted due to high resource usage{resourcesReport}"
+                                        : $"{Icons.Warning} Pod `{_pod.Metadata.Name}` has high resource usage but self-destruction is disabled{resourcesReport}";
+
+                                    await _sendMessage(message);
+                                }
 
                                 if (destroyed)
                                 {
