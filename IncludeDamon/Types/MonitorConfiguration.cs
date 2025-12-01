@@ -71,86 +71,143 @@ internal static class MonitorConfiguration
                 throw new ConfigurationException($"Resource type '{resourceType}' for target '{targetLabel}' is not supported. Use 'daemonset' or 'deployment'.");
             }
 
-            Uri externalBaseUri = ParseHost(RequireValue(dto.Host, "host", targetLabel));
+            MonitorDefinition[] monitors = ExpandMonitors(dto);
 
-            string[] paths = ParsePaths(dto.Paths);
-
-            string scheme = NormalizeScheme(dto.Scheme ?? externalBaseUri.Scheme);
-
-            int defaultPort = GetDefaultPortForScheme(scheme);
-
-            int port = dto.Port switch
+            for (int monitorIndex = 0; monitorIndex < monitors.Length; monitorIndex++)
             {
-                null when !externalBaseUri.IsDefaultPort => externalBaseUri.Port,
-                null => defaultPort,
-                >= 1 and <= 65535 => dto.Port.Value,
-                _ => throw new ConfigurationException($"Target '{targetLabel}' must specify a valid 'port' between 1 and 65535 when provided.")
-            };
+                MonitorDefinition monitor = monitors[monitorIndex];
 
-            Uri externalBaseUriWithPort = EnsurePort(externalBaseUri, port);
+                string monitorLabel = monitors.Length > 1 ? $"{targetLabel} monitor[{monitorIndex}]" : targetLabel;
 
-            string verb = NormalizeVerb(dto.Verb);
+                string hostSegment = RequireValue(monitor.Host ?? dto.Host, "host", monitorLabel);
 
-            string? payload = dto.Payload;
+                Uri externalBaseUri = ParseHost(hostSegment);
 
-            string? contentType = dto.ContentType;
+                string[] paths = ParsePaths(monitor.Paths ?? dto.Paths);
 
-            if (verb == HttpMethod.Post.Method)
-            {
-                if (IsNullOrWhiteSpace(payload))
+                string scheme = NormalizeScheme(monitor.Scheme ?? dto.Scheme ?? externalBaseUri.Scheme);
+
+                int defaultPort = GetDefaultPortForScheme(scheme);
+
+                int port = ResolvePort(monitor.Port ?? dto.Port, externalBaseUri, defaultPort, monitorLabel);
+
+                Uri externalBaseUriWithPort = EnsurePort(externalBaseUri, port);
+
+                string verb = NormalizeVerb(monitor.Verb ?? dto.Verb);
+
+                string? payload = monitor.Payload ?? dto.Payload;
+
+                string? contentType = monitor.ContentType ?? dto.ContentType;
+
+                if (verb == HttpMethod.Post.Method)
                 {
-                    throw new ConfigurationException($"Target '{targetLabel}' requires a 'payload' when using POST.");
+                    if (IsNullOrWhiteSpace(payload))
+                    {
+                        throw new ConfigurationException($"Target '{monitorLabel}' requires a 'payload' when using POST.");
+                    }
+
+                    if (IsNullOrWhiteSpace(contentType))
+                    {
+                        throw new ConfigurationException($"Target '{monitorLabel}' requires a 'contentType' when using POST.");
+                    }
+                }
+                else
+                {
+                    payload = null;
+
+                    contentType = null;
                 }
 
-                if (IsNullOrWhiteSpace(contentType))
-                {
-                    throw new ConfigurationException($"Target '{targetLabel}' requires a 'contentType' when using POST.");
-                }
+                TimeSpan responseTimeout = ResolveTimeSpan(monitor.TimeoutSeconds ?? dto.TimeoutSeconds,
+                    MonitorTarget.DefaultResponseTimeout);
+
+                TimeSpan issueWindow = ResolveTimeSpan(monitor.IssueWindowSeconds ?? dto.IssueWindowSeconds,
+                    MonitorTarget.DefaultIssueWindow);
+
+                TimeSpan startupWindow = ResolveTimeSpan(monitor.StartupWindowSeconds ?? dto.StartupWindowSeconds,
+                    MonitorTarget.DefaultStartupWindow);
+
+                TimeSpan resourceIssueWindow = ResolveTimeSpan(
+                    monitor.ResourceIssueWindowSeconds ?? dto.ResourceIssueWindowSeconds,
+                    MonitorTarget.DefaultResourceIssueWindow);
+
+                double restartThreshold = ResolveRestartThreshold(monitor.RestartThreshold ?? dto.RestartThreshold);
+
+                bool shouldDestroyFaultyPods = ResolveBool(monitor.DestroyFaultyPods, dto.DestroyFaultyPods,
+                    MonitorTarget.DefaultShouldDestroyFaultyPods);
+
+                bool logNotDestroying = ResolveBool(monitor.LogNotDestroying, dto.LogNotDestroying,
+                    MonitorTarget.DefaultLogNotDestroying);
+
+                string? hostHeaderSource = monitor.HostHeader ?? dto.HostHeader;
+
+                string hostHeader = !IsNullOrWhiteSpace(hostHeaderSource)
+                    ? hostHeaderSource!
+                    : port == defaultPort
+                        ? externalBaseUriWithPort.Host
+                        : $"{externalBaseUriWithPort.Host}:{port}";
+
+                monitorTargets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, paths,
+                    externalBaseUriWithPort, port, hostHeader, scheme, verb, payload, contentType, responseTimeout,
+                    issueWindow, startupWindow, resourceIssueWindow, restartThreshold, shouldDestroyFaultyPods,
+                    logNotDestroying));
             }
-            else
-            {
-                payload = null;
-
-                contentType = null;
-            }
-
-            TimeSpan responseTimeout = dto.TimeoutSeconds is > 0
-                ? TimeSpan.FromSeconds(dto.TimeoutSeconds!.Value)
-                : MonitorTarget.DefaultResponseTimeout;
-
-            TimeSpan issueWindow = dto.IssueWindowSeconds is > 0
-                ? TimeSpan.FromSeconds(dto.IssueWindowSeconds!.Value)
-                : MonitorTarget.DefaultIssueWindow;
-
-            TimeSpan startupWindow = dto.StartupWindowSeconds is > 0
-                ? TimeSpan.FromSeconds(dto.StartupWindowSeconds!.Value)
-                : MonitorTarget.DefaultStartupWindow;
-
-            TimeSpan resourceIssueWindow = dto.ResourceIssueWindowSeconds is > 0
-                ? TimeSpan.FromSeconds(dto.ResourceIssueWindowSeconds!.Value)
-                : MonitorTarget.DefaultResourceIssueWindow;
-
-            double restartThreshold = dto.RestartThreshold is > 0
-                ? dto.RestartThreshold!.Value
-                : MonitorTarget.DefaultRestartThreshold;
-
-            bool shouldDestroyFaultyPods = dto.DestroyFaultyPods ?? MonitorTarget.DefaultShouldDestroyFaultyPods;
-
-            bool logNotDestroying = dto.LogNotDestroying ?? MonitorTarget.DefaultLogNotDestroying;
-
-            string hostHeader = !IsNullOrWhiteSpace(dto.HostHeader)
-                ? dto.HostHeader!
-                : port == defaultPort
-                    ? externalBaseUriWithPort.Host
-                    : $"{externalBaseUriWithPort.Host}:{port}";
-
-            monitorTargets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, paths,
-                externalBaseUriWithPort, port, hostHeader, scheme, verb, payload, contentType, responseTimeout,
-                issueWindow, startupWindow, resourceIssueWindow, restartThreshold, shouldDestroyFaultyPods,
-                logNotDestroying));
         }
 
         return monitorTargets.ToArray();
+    }
+
+    private static MonitorDefinition[] ExpandMonitors(Target dto)
+    {
+        return dto.Monitors is { Length: > 0 }
+            ? dto.Monitors
+            :
+            [
+                new MonitorDefinition
+                {
+                    Host = dto.Host,
+                    Paths = dto.Paths,
+                    Port = dto.Port,
+                    HostHeader = dto.HostHeader,
+                    Scheme = dto.Scheme,
+                    Verb = dto.Verb,
+                    Payload = dto.Payload,
+                    ContentType = dto.ContentType,
+                    TimeoutSeconds = dto.TimeoutSeconds,
+                    IssueWindowSeconds = dto.IssueWindowSeconds,
+                    StartupWindowSeconds = dto.StartupWindowSeconds,
+                    ResourceIssueWindowSeconds = dto.ResourceIssueWindowSeconds,
+                    RestartThreshold = dto.RestartThreshold,
+                    DestroyFaultyPods = dto.DestroyFaultyPods,
+                    LogNotDestroying = dto.LogNotDestroying
+                }
+            ];
+    }
+
+    private static int ResolvePort(int? port, Uri externalBaseUri, int defaultPort, string monitorLabel)
+    {
+        return port switch
+        {
+            null when !externalBaseUri.IsDefaultPort => externalBaseUri.Port,
+            null => defaultPort,
+            >= 1 and <= 65535 => port.Value,
+            _ => throw new ConfigurationException($"Target '{monitorLabel}' must specify a valid 'port' between 1 and 65535 when provided.")
+        };
+    }
+
+    private static TimeSpan ResolveTimeSpan(double? seconds, TimeSpan fallback)
+    {
+        return seconds is > 0 ? TimeSpan.FromSeconds(seconds.Value) : fallback;
+    }
+
+    private static double ResolveRestartThreshold(double? restartThreshold)
+    {
+        return restartThreshold is > 0 ? restartThreshold.Value : MonitorTarget.DefaultRestartThreshold;
+    }
+
+    private static bool ResolveBool(bool? monitorValue, bool? targetValue, bool fallback)
+    {
+        return monitorValue ?? targetValue ?? fallback;
     }
 
     private static int GetDefaultPortForScheme(string scheme)

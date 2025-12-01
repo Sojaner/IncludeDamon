@@ -2,14 +2,8 @@
 namespace IncludeDamon.Types;
 
 // ReSharper disable once ClassNeverInstantiated.Global
-internal sealed class Target
+internal sealed class MonitorDefinition
 {
-    public string? Namespace { get; set; }
-
-    public string? ResourceType { get; set; }
-
-    public string? ResourceName { get; set; }
-
     public string? Host { get; set; }
 
     public string[]? Paths { get; set; }
@@ -39,6 +33,4 @@ internal sealed class Target
     public bool? DestroyFaultyPods { get; set; }
 
     public bool? LogNotDestroying { get; set; }
-
-    public MonitorDefinition[]? Monitors { get; set; }
 }

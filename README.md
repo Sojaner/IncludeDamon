@@ -92,4 +92,18 @@ Optional fields:
 `payload`/`contentType` (required when `verb` is `POST`), `timeoutSeconds` (defaults to `5`),
 `hostHeader` (defaults to host[:port]), `issueWindowSeconds` (defaults to `60`),
 `startupWindowSeconds` (defaults to `120`), `resourceIssueWindowSeconds` (defaults to `300`),
-`restartThreshold` (defaults to `0.9`), and `destroyFaultyPods` (defaults to `false`).
+`restartThreshold` (defaults to `0.9`), `destroyFaultyPods` (defaults to `false`), and `logNotDestroying` (defaults to `false`).
+
+You can also provide a `monitors` array per target to fan out multiple checks with their own overrides (top-level fields act as defaults when omitted):
+```
+{
+  "namespace": "default",
+  "resourceType": "daemonset",
+  "resourceName": "application4",
+  "host": "https://domain.com",
+  "monitors": [
+    { "paths": ["/monitor"], "timeoutSeconds": 5 },
+    { "paths": ["/health"], "verb": "POST", "payload": "{}", "contentType": "application/json", "port": 8443 }
+  ]
+}
+```
