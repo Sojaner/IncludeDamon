@@ -71,6 +71,7 @@ spec:
                 "resourceType": "daemonset",
                 "resourceName": "application2",
                 "host": "https://api.domain.com",
+                "port": 8443,
                 "paths": ["/monitor"],
                 "timeoutSeconds": 5
               },
@@ -87,7 +88,7 @@ spec:
 `TARGETS` is now a JSON array; each entry must include `namespace`, `resourceType` (daemonset/deployment), `resourceName`, and `host`.
 Optional fields:
 `paths` (defaults to `["/"]`), `labelSelector` (optional; auto-detected from the workload's selector when omitted),
-`scheme` (`http`/`https`, defaults to the host's scheme), `verb` (`GET`/`POST`),
+`scheme` (`http`/`https`, defaults to the host's scheme), `port` (defaults to `80` for `http`, `443` for `https`), `verb` (`GET`/`POST`),
 `payload`/`contentType` (required when `verb` is `POST`), `timeoutSeconds` (defaults to `5`),
 `hostHeader` (defaults to host[:port]), `issueWindowSeconds` (defaults to `60`),
 `startupWindowSeconds` (defaults to `120`), `resourceIssueWindowSeconds` (defaults to `300`),

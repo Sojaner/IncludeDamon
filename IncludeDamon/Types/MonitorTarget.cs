@@ -19,6 +19,7 @@ internal sealed class MonitorTarget
         MonitorResourceType resourceKind,
         string[] paths,
         Uri externalBaseUri,
+        int port,
         string hostHeader,
         string scheme,
         string verb,
@@ -39,6 +40,7 @@ internal sealed class MonitorTarget
         LabelSelector = null;
         Paths = paths;
         ExternalBaseUri = externalBaseUri;
+        Port = port;
         HostHeader = hostHeader;
         Scheme = scheme;
         Verb = verb;
@@ -66,6 +68,8 @@ internal sealed class MonitorTarget
     public string[] Paths { get; }
 
     public Uri ExternalBaseUri { get; }
+
+    public int Port { get; }
 
     public string HostHeader { get; }
 

@@ -34,6 +34,8 @@ internal class PodMonitor : IDisposable
 
     private readonly string _scheme;
 
+    private readonly int _port;
+
     private readonly string _verb;
 
     private readonly string? _payload;
@@ -86,6 +88,8 @@ internal class PodMonitor : IDisposable
         _paths = target.Paths;
 
         _scheme = target.Scheme;
+
+        _port = target.Port;
 
         _verb = target.Verb;
 
@@ -225,7 +229,7 @@ internal class PodMonitor : IDisposable
             return (0, realUrl);
         }
 
-        string url = $"{_scheme}://{podIp}{path}";
+        string url = BuildInClusterUrl(path, podIp);
 
         try
         {
@@ -260,6 +264,34 @@ internal class PodMonitor : IDisposable
     private string BuildDisplayUrl(string path)
     {
         return new Uri(_externalBaseUri, path).ToString();
+    }
+
+    private string BuildInClusterUrl(string path, string host)
+    {
+        string formattedHost = host.Contains(':') && !host.StartsWith("[")
+            ? $"[{host}]"
+            : host;
+
+        return $"{_scheme}://{formattedHost}:{_port}{path}";
+    }
+
+    private void LogHealthCheckTargets()
+    {
+        string podIp = _pod.Status.PodIP ?? "<pending-pod-ip>";
+
+        foreach (string path in _paths)
+        {
+            StringBuilder logMessage = new(
+                $"[MONITOR HEALTH TARGET] {_pod.Metadata.Name} {_verb} {BuildInClusterUrl(path, podIp)}");
+
+            if (_verb == HttpMethod.Post.Method)
+            {
+                logMessage.Append(
+                    $" (content-type: {_contentType ?? "<none>"}, payload: {_payload ?? "<empty>"})");
+            }
+
+            Console.WriteLine(logMessage.ToString());
+        }
     }
 
     private bool RegisterInstability(string category, out string? forcedReason)
@@ -348,6 +380,8 @@ internal class PodMonitor : IDisposable
             {
                 Console.WriteLine(
                     $"[MONITOR STARTED] {_pod.Metadata.Name} (up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)})");
+
+                LogHealthCheckTargets();
 
                 TimeSpan startupWindow = TimeSpan.FromTicks((long)(_startupWindowBase.Ticks * _waitFactor));
 

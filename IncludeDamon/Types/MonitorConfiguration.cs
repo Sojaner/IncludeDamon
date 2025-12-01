@@ -77,6 +77,18 @@ internal static class MonitorConfiguration
 
             string scheme = NormalizeScheme(dto.Scheme ?? externalBaseUri.Scheme);
 
+            int defaultPort = GetDefaultPortForScheme(scheme);
+
+            int port = dto.Port switch
+            {
+                null when !externalBaseUri.IsDefaultPort => externalBaseUri.Port,
+                null => defaultPort,
+                >= 1 and <= 65535 => dto.Port.Value,
+                _ => throw new ConfigurationException($"Target '{targetLabel}' must specify a valid 'port' between 1 and 65535 when provided.")
+            };
+
+            Uri externalBaseUriWithPort = EnsurePort(externalBaseUri, port);
+
             string verb = NormalizeVerb(dto.Verb);
 
             string? payload = dto.Payload;
@@ -128,16 +140,22 @@ internal static class MonitorConfiguration
 
             string hostHeader = !IsNullOrWhiteSpace(dto.HostHeader)
                 ? dto.HostHeader!
-                : externalBaseUri.IsDefaultPort
-                    ? externalBaseUri.Host
-                    : $"{externalBaseUri.Host}:{externalBaseUri.Port}";
+                : port == defaultPort
+                    ? externalBaseUriWithPort.Host
+                    : $"{externalBaseUriWithPort.Host}:{port}";
 
             monitorTargets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, paths,
-                externalBaseUri, hostHeader, scheme, verb, payload, contentType, responseTimeout, issueWindow,
-                startupWindow, resourceIssueWindow, restartThreshold, shouldDestroyFaultyPods, logNotDestroying));
+                externalBaseUriWithPort, port, hostHeader, scheme, verb, payload, contentType, responseTimeout,
+                issueWindow, startupWindow, resourceIssueWindow, restartThreshold, shouldDestroyFaultyPods,
+                logNotDestroying));
         }
 
         return monitorTargets.ToArray();
+    }
+
+    private static int GetDefaultPortForScheme(string scheme)
+    {
+        return scheme == "https" ? 443 : 80;
     }
 
     private static string NormalizeScheme(string? scheme)
@@ -173,6 +191,16 @@ internal static class MonitorConfiguration
         return !Uri.TryCreate(hostSegment, UriKind.Absolute, out Uri? uri)
             ? throw new ConfigurationException($"Host '{hostSegment}' must be a valid absolute URI including scheme (e.g. https://example.com).")
             : uri;
+    }
+
+    private static Uri EnsurePort(Uri baseUri, int port)
+    {
+        UriBuilder builder = new(baseUri)
+        {
+            Port = port
+        };
+
+        return builder.Uri;
     }
 
     private static string[] ParsePaths(string[]? paths)

@@ -14,6 +14,8 @@ internal sealed class Target
 
     public string[]? Paths { get; set; }
 
+    public int? Port { get; set; }
+
     public string? HostHeader { get; set; }
 
     public string? Scheme { get; set; }
