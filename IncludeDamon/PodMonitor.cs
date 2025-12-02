@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using Humanizer;
 using IncludeDamon.Types;
@@ -71,6 +72,8 @@ internal class PodMonitor : IDisposable
     private Status _status;
 
     private bool _resourceInstabilityRecorded;
+
+    private CultureInfo _cultureInfo = new ("en-US");
 
     public string Name { get; }
 
@@ -203,7 +206,7 @@ internal class PodMonitor : IDisposable
 
             double memoryLimit = limits["memory"].ToDouble();
 
-            return $" *[CPU: {$"{cpuUsage / cpuLimit:P1}({cpuUsage}/{cpuLimit}cores)".Replace(" ", "")}, Memory: {$"{memoryUsage / memoryLimit:P1}({ByteSize.FromBytes(memoryUsage)}/{ByteSize.FromBytes(memoryLimit)}".Replace(" ", "")})]*";
+            return $" *[CPU: {$"{cpuUsage / cpuLimit:P1}({cpuUsage.ToString("0.##", _cultureInfo)}/{cpuLimit.ToString("0.##", _cultureInfo)}cores)".Replace(" ", "")}, Memory: {$"{memoryUsage / memoryLimit:P1}({ByteSize.FromBytes(memoryUsage)}/{ByteSize.FromBytes(memoryLimit)}".Replace(" ", "")})]*";
         }
         catch
         {
