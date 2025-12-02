@@ -142,7 +142,7 @@ internal static class MonitorConfiguration
                 string? hostHeaderSource = monitor.HostHeader ?? dto.HostHeader;
 
                 string hostHeader = !IsNullOrWhiteSpace(hostHeaderSource)
-                    ? hostHeaderSource!
+                    ? hostHeaderSource
                     : port == defaultPort
                         ? externalBaseUriWithPort.Host
                         : $"{externalBaseUriWithPort.Host}:{port}";
