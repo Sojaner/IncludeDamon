@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -45,6 +46,12 @@ internal class PodMonitor : IDisposable
 
     private readonly Uri _externalBaseUri;
 
+    private readonly TimeSpan _restartCooldown;
+
+    private readonly string _restartKeyPrefix;
+
+    private readonly string _podUid;
+
     private static readonly TimeSpan InstabilityWindow = TimeSpan.FromMinutes(60);
 
     private const double InstabilityRateThresholdPerMinute = 0.12; // ~7 per hour, aligns with previous thresholds
@@ -72,6 +79,10 @@ internal class PodMonitor : IDisposable
     private Status _status;
 
     private bool _resourceInstabilityRecorded;
+
+    private static readonly ConcurrentDictionary<string, RestartRecord> RestartCooldownTracker = new();
+
+    private sealed record RestartRecord(DateTime Time, string PodUid);
 
     private CultureInfo _cultureInfo = new ("en-US");
 
@@ -101,6 +112,10 @@ internal class PodMonitor : IDisposable
         _contentType = target.ContentType;
 
         _externalBaseUri = target.ExternalBaseUri;
+
+        _restartCooldown = target.RestartCooldown;
+
+        _restartKeyPrefix = target.ToString();
 
         _issueWindow = target.IssueWindow;
 
@@ -149,6 +164,8 @@ internal class PodMonitor : IDisposable
         _status = Status.Unknown;
 
         Name = $"{_pod.Metadata.NamespaceProperty}/{_pod.Metadata.Name}";
+
+        _podUid = _pod.Metadata.Uid ?? "";
 
         Status = Status.Unknown;
     }
@@ -366,6 +383,34 @@ internal class PodMonitor : IDisposable
 
             return false;
         }
+
+        DateTime now = DateTime.UtcNow;
+
+        string restartKey = $"{_restartKeyPrefix}@{_pod.Spec?.NodeName ?? "<unknown-node>"}";
+
+        if (RestartCooldownTracker.TryGetValue(restartKey, out RestartRecord? record))
+        {
+            if (!string.Equals(record.PodUid, _podUid, StringComparison.Ordinal))
+            {
+                RestartCooldownTracker.TryRemove(restartKey, out _);
+            }
+            else
+            {
+                TimeSpan sinceLastRestart = now - record.Time;
+
+                if (sinceLastRestart < _restartCooldown)
+                {
+                    TimeSpan remaining = _restartCooldown - sinceLastRestart;
+
+                    Console.WriteLine(
+                        $"[SELF DESTRUCT COOLDOWN] {_pod.Metadata.Name} on {_pod.Spec?.NodeName ?? "<unknown-node>"} waiting {remaining.Humanize(2, minUnit: TimeUnit.Second)} before next restart");
+
+                    return false;
+                }
+            }
+        }
+
+        RestartCooldownTracker[restartKey] = new RestartRecord(now, _podUid);
 
         await _kubernetes.DeleteNamespacedPodAsync(_pod.Metadata.Name, _pod.Metadata.NamespaceProperty,
             new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: _cancellationToken);

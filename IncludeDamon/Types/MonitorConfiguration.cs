@@ -131,6 +131,10 @@ internal static class MonitorConfiguration
                     monitor.ResourceIssueWindowSeconds ?? dto.ResourceIssueWindowSeconds,
                     MonitorTarget.DefaultResourceIssueWindow);
 
+                TimeSpan restartCooldown = ResolveTimeSpan(
+                    monitor.RestartCooldownSeconds ?? dto.RestartCooldownSeconds,
+                    MonitorTarget.DefaultRestartCooldown);
+
                 double restartThreshold = ResolveRestartThreshold(monitor.RestartThreshold ?? dto.RestartThreshold);
 
                 bool shouldDestroyFaultyPods = ResolveBool(monitor.DestroyFaultyPods, dto.DestroyFaultyPods,
@@ -149,8 +153,8 @@ internal static class MonitorConfiguration
 
                 monitorTargets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, paths,
                     externalBaseUriWithPort, port, hostHeader, scheme, verb, payload, contentType, responseTimeout,
-                    issueWindow, startupWindow, resourceIssueWindow, restartThreshold, shouldDestroyFaultyPods,
-                    logNotDestroying));
+                    issueWindow, startupWindow, resourceIssueWindow, restartCooldown, restartThreshold,
+                    shouldDestroyFaultyPods, logNotDestroying));
             }
         }
 
@@ -177,6 +181,7 @@ internal static class MonitorConfiguration
                     IssueWindowSeconds = dto.IssueWindowSeconds,
                     StartupWindowSeconds = dto.StartupWindowSeconds,
                     ResourceIssueWindowSeconds = dto.ResourceIssueWindowSeconds,
+                    RestartCooldownSeconds = dto.RestartCooldownSeconds,
                     RestartThreshold = dto.RestartThreshold,
                     DestroyFaultyPods = dto.DestroyFaultyPods,
                     LogNotDestroying = dto.LogNotDestroying

@@ -36,6 +36,8 @@ internal sealed class Target
 
     public double? RestartThreshold { get; set; }
 
+    public double? RestartCooldownSeconds { get; set; }
+
     public bool? DestroyFaultyPods { get; set; }
 
     public bool? LogNotDestroying { get; set; }
