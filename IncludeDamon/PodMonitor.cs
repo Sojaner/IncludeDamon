@@ -283,7 +283,16 @@ internal class PodMonitor : IDisposable
 
     private string BuildDisplayUrl(string path)
     {
-        return new Uri(_externalBaseUri, path).ToString();
+        UriBuilder builder = new(_externalBaseUri);
+
+        int defaultPort = _scheme == "https" ? 443 : 80;
+
+        if (builder.Port == defaultPort)
+        {
+            builder.Port = -1; // suppress standard ports in display URLs
+        }
+
+        return new Uri(builder.Uri, path).ToString();
     }
 
     private string BuildInClusterUrl(string path, string host)
