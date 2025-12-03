@@ -152,7 +152,7 @@ internal static class MonitorConfiguration
                         : $"{externalBaseUriWithPort.Host}:{port}";
 
                 monitorTargets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, paths,
-                    externalBaseUriWithPort, port, hostHeader, scheme, verb, payload, contentType, responseTimeout,
+                    externalBaseUri, port, hostHeader, scheme, verb, payload, contentType, responseTimeout,
                     issueWindow, startupWindow, resourceIssueWindow, restartCooldown, restartThreshold,
                     shouldDestroyFaultyPods, logNotDestroying));
             }
