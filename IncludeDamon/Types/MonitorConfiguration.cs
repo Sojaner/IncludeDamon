@@ -137,6 +137,9 @@ internal static class MonitorConfiguration
 
                 double restartThreshold = ResolveRestartThreshold(monitor.RestartThreshold ?? dto.RestartThreshold);
 
+                double instabilityRateThresholdPerMinute = ResolveInstabilityRateThreshold(
+                    monitor.InstabilityRateThresholdPerMinute ?? dto.InstabilityRateThresholdPerMinute, monitorLabel);
+
                 bool shouldDestroyFaultyPods = ResolveBool(monitor.DestroyFaultyPods, dto.DestroyFaultyPods,
                     MonitorTarget.DefaultShouldDestroyFaultyPods);
 
@@ -154,7 +157,7 @@ internal static class MonitorConfiguration
                 monitorTargets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, paths,
                     externalBaseUri, port, hostHeader, scheme, verb, payload, contentType, responseTimeout,
                     issueWindow, startupWindow, resourceIssueWindow, restartCooldown, restartThreshold,
-                    shouldDestroyFaultyPods, logNotDestroying));
+                    instabilityRateThresholdPerMinute, shouldDestroyFaultyPods, logNotDestroying));
             }
         }
 
@@ -183,6 +186,7 @@ internal static class MonitorConfiguration
                     ResourceIssueWindowSeconds = dto.ResourceIssueWindowSeconds,
                     RestartCooldownSeconds = dto.RestartCooldownSeconds,
                     RestartThreshold = dto.RestartThreshold,
+                    InstabilityRateThresholdPerMinute = dto.InstabilityRateThresholdPerMinute,
                     DestroyFaultyPods = dto.DestroyFaultyPods,
                     LogNotDestroying = dto.LogNotDestroying
                 }
@@ -208,6 +212,22 @@ internal static class MonitorConfiguration
     private static double ResolveRestartThreshold(double? restartThreshold)
     {
         return restartThreshold is > 0 ? restartThreshold.Value : MonitorTarget.DefaultRestartThreshold;
+    }
+
+    private static double ResolveInstabilityRateThreshold(double? instabilityRateThresholdPerMinute, string monitorLabel)
+    {
+        if (instabilityRateThresholdPerMinute is null)
+        {
+            return MonitorTarget.DefaultInstabilityRateThresholdPerMinute;
+        }
+
+        if (instabilityRateThresholdPerMinute <= 0)
+        {
+            throw new ConfigurationException(
+                $"Target '{monitorLabel}' must specify 'instabilityRateThresholdPerMinute' greater than 0 when provided.");
+        }
+
+        return instabilityRateThresholdPerMinute.Value;
     }
 
     private static bool ResolveBool(bool? monitorValue, bool? targetValue, bool fallback)

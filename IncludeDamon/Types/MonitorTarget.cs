@@ -10,6 +10,7 @@ internal sealed class MonitorTarget
     internal static readonly TimeSpan DefaultResourceIssueWindow = TimeSpan.FromSeconds(300);
     internal static readonly TimeSpan DefaultRestartCooldown = TimeSpan.FromSeconds(60);
     internal const double DefaultRestartThreshold = 0.9;
+    internal const double DefaultInstabilityRateThresholdPerMinute = 0.1;
     internal const bool DefaultShouldDestroyFaultyPods = false;
     internal const bool DefaultLogNotDestroying = false;
 
@@ -32,6 +33,7 @@ internal sealed class MonitorTarget
         TimeSpan resourceIssueWindow,
         TimeSpan restartCooldown,
         double restartThreshold,
+        double instabilityRateThresholdPerMinute,
         bool shouldDestroyFaultyPods,
         bool logNotDestroying)
     {
@@ -54,6 +56,7 @@ internal sealed class MonitorTarget
         ResourceIssueWindow = resourceIssueWindow;
         RestartCooldown = restartCooldown;
         RestartThreshold = restartThreshold;
+        InstabilityRateThresholdPerMinute = instabilityRateThresholdPerMinute;
         ShouldDestroyFaultyPods = shouldDestroyFaultyPods;
         LogNotDestroying = logNotDestroying;
     }
@@ -95,6 +98,8 @@ internal sealed class MonitorTarget
     public TimeSpan RestartCooldown { get; }
 
     public double RestartThreshold { get; }
+
+    public double InstabilityRateThresholdPerMinute { get; }
 
     public bool ShouldDestroyFaultyPods { get; }
 

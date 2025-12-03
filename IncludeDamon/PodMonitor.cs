@@ -54,8 +54,6 @@ internal class PodMonitor : IDisposable
 
     private static readonly TimeSpan InstabilityWindow = TimeSpan.FromMinutes(60);
 
-    private const double InstabilityRateThresholdPerMinute = 0.12; // ~7 per hour, aligns with previous thresholds
-
     private const int MinInstabilityEvents = 3;
 
     private readonly List<DateTime> _instabilityEvents = [];
@@ -67,6 +65,8 @@ internal class PodMonitor : IDisposable
     private readonly TimeSpan _resourceIssueWindow;
 
     private readonly double _restartThreshold;
+
+    private readonly double _instabilityRateThresholdPerMinute;
 
     private readonly bool _shouldDestroyFaultyPods;
 
@@ -124,6 +124,8 @@ internal class PodMonitor : IDisposable
         _resourceIssueWindow = target.ResourceIssueWindow;
 
         _restartThreshold = target.RestartThreshold;
+
+        _instabilityRateThresholdPerMinute = target.InstabilityRateThresholdPerMinute;
 
         _shouldDestroyFaultyPods = target.ShouldDestroyFaultyPods;
 
@@ -295,6 +297,17 @@ internal class PodMonitor : IDisposable
         return $"{_scheme}://{formattedHost}:{_port}{path}";
     }
 
+    private string FormatPodDisplayName(V1Pod? pod = null)
+    {
+        V1Pod source = pod ?? _pod;
+
+        string podName = source.Metadata?.Name ?? "<unknown-pod>";
+
+        string? nodeName = source.Spec?.NodeName;
+
+        return !IsNullOrWhiteSpace(nodeName) ? $"{podName} ({nodeName})" : podName;
+    }
+
     private void LogHealthCheckTargets()
     {
         string podIp = _pod.Status.PodIP ?? "<pending-pod-ip>";
@@ -302,7 +315,7 @@ internal class PodMonitor : IDisposable
         foreach (string path in _paths)
         {
             StringBuilder logMessage = new(
-                $"[MONITOR HEALTH TARGET] {_pod.Metadata.Name} {_verb} {BuildInClusterUrl(path, podIp)}");
+                $"[MONITOR HEALTH TARGET] {FormatPodDisplayName()} {_verb} {BuildInClusterUrl(path, podIp)}");
 
             if (_verb == HttpMethod.Post.Method)
             {
@@ -336,10 +349,10 @@ internal class PodMonitor : IDisposable
 
         double ratePerMinute = _instabilityEvents.Count / minutes;
 
-        if (ratePerMinute > InstabilityRateThresholdPerMinute)
+        if (ratePerMinute > _instabilityRateThresholdPerMinute)
         {
             forcedReason =
-                $"{category} instability rate {ratePerMinute:F2}/min over {minutes:F0} minutes (threshold {InstabilityRateThresholdPerMinute:F2}/min)";
+                $"{category} instability rate {ratePerMinute:F2}/min over {minutes:F0} minutes (threshold {_instabilityRateThresholdPerMinute:F2}/min)";
 
             return true;
         }
@@ -363,11 +376,11 @@ internal class PodMonitor : IDisposable
                 : "[INSTABILITY DETECTED - DESTRUCTION DISABLED]";
 
             Console.WriteLine(
-                $"{logLabel} {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}) {reason}{resourcesReport}");
+                $"{logLabel} {FormatPodDisplayName()} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}) {reason}{resourcesReport}");
 
             string message = destroyed
-                ? $"{Icons.Fail} Pod `{_pod.Metadata.Name}` restarted due to repeated instability ({reason}){resourcesReport}"
-                : $"{Icons.Warning} Pod `{_pod.Metadata.Name}` is repeatedly unstable ({reason}) but self-destruction is disabled{resourcesReport}";
+                ? $"{Icons.Fail} Pod `{FormatPodDisplayName()}` restarted due to repeated instability ({reason}){resourcesReport}"
+                : $"{Icons.Warning} Pod `{FormatPodDisplayName()}` is repeatedly unstable ({reason}) but self-destruction is disabled{resourcesReport}";
 
             await _sendMessage(message);
         }
@@ -379,7 +392,7 @@ internal class PodMonitor : IDisposable
     {
         if (!_shouldDestroyFaultyPods)
         {
-            Console.WriteLine($"[SELF DESTRUCT SKIPPED] {_pod.Metadata.Name}");
+            Console.WriteLine($"[SELF DESTRUCT SKIPPED] {FormatPodDisplayName()}");
 
             return false;
         }
@@ -403,7 +416,7 @@ internal class PodMonitor : IDisposable
                     TimeSpan remaining = _restartCooldown - sinceLastRestart;
 
                     Console.WriteLine(
-                        $"[SELF DESTRUCT COOLDOWN] {_pod.Metadata.Name} on {_pod.Spec?.NodeName ?? "<unknown-node>"} waiting {remaining.Humanize(2, minUnit: TimeUnit.Second)} before next restart");
+                        $"[SELF DESTRUCT COOLDOWN] {FormatPodDisplayName()} waiting {remaining.Humanize(2, minUnit: TimeUnit.Second)} before next restart");
 
                     return false;
                 }
@@ -427,7 +440,7 @@ internal class PodMonitor : IDisposable
             try
             {
                 Console.WriteLine(
-                    $"[MONITOR STARTED] {_pod.Metadata.Name} (up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)})");
+                    $"[MONITOR STARTED] {FormatPodDisplayName()} (up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)})");
 
                 LogHealthCheckTargets();
 
@@ -454,7 +467,7 @@ internal class PodMonitor : IDisposable
                                 _lastPhase = phase;
 
                                 await _sendMessage(
-                                    $"{Icons.Start} New pod `{_pod.Metadata.Name}` started. (Startup respite: {startupWindow.Humanize(minUnit: TimeUnit.Minute)})");
+                                    $"{Icons.Start} New pod `{FormatPodDisplayName(pod)}` started. (Startup respite: {startupWindow.Humanize(minUnit: TimeUnit.Minute)})");
 
                                 startupStopwatch.Start();
                             }
@@ -476,7 +489,7 @@ internal class PodMonitor : IDisposable
                             if (Status != _status)
                             {
                                 Console.WriteLine(
-                                    $"[MONITOR RESPONSE CHANGED] {_pod.Metadata.Name} Now: {Status}, Previous: {_status}{await GetResourcesAsync(pod)}");
+                                    $"[MONITOR RESPONSE CHANGED] {FormatPodDisplayName(pod)} Now: {Status}, Previous: {_status}{await GetResourcesAsync(pod)}");
                             }
 
                             if (Status is Status.Ok && _status is Status.Problem or Status.Redeploying)
@@ -488,10 +501,10 @@ internal class PodMonitor : IDisposable
                                 string resourcesReport = await GetResourcesAsync(pod);
 
                                 Console.WriteLine(
-                                    $"[MONITOR RESPONSE HEALTHY] {_pod.Metadata.Name}{resourcesReport}");
+                                    $"[MONITOR RESPONSE HEALTHY] {FormatPodDisplayName(pod)}{resourcesReport}");
 
                                 await _sendMessage(
-                                    $"{Icons.Check} Pod `{_pod.Metadata.Name}` works fine for {Join(", ", results.Select(result => $"{result.path}"))}{resourcesReport}");
+                                    $"{Icons.Check} Pod `{FormatPodDisplayName(pod)}` works fine for {Join(", ", results.Select(result => $"{result.path}"))}{resourcesReport}");
 
                                 _onStabilized.Invoke(_cancellationToken);
                             }
@@ -502,7 +515,7 @@ internal class PodMonitor : IDisposable
                                 string resourcesReport = await GetResourcesAsync(pod);
 
                                 Console.WriteLine(
-                                    $"[MONITOR RESPONSE FAULTY] {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
+                                    $"[MONITOR RESPONSE FAULTY] {FormatPodDisplayName(pod)} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
 
                                 string reason =
                                     $" {Icons.RedCircle} {Join(", ", results.Where(result => result.code is not (200 or > 300 and < 310)).Select(result => $"{result.path} `{(result.code is > 0 and < 999 ? $"returns {result.code}" : result.code > 0 ? $"times out (longer than {_client.Timeout.Humanize(4, minUnit: TimeUnit.Second)})" : "does not respond")}`"))}";
@@ -514,7 +527,7 @@ internal class PodMonitor : IDisposable
                                 }
 
                                 await _sendMessage(
-                                    $"{Icons.Warning} Problem in pod `{_pod.Metadata.Name}` {reason}{resourcesReport}");
+                                    $"{Icons.Warning} Problem in pod `{FormatPodDisplayName(pod)}` {reason}{resourcesReport}");
 
                                 if (await MaybeForceRestartForInstability("response", resourcesReport))
                                 {
@@ -537,11 +550,11 @@ internal class PodMonitor : IDisposable
                                         : "[MONITOR RESPONSE FAULTY - DESTRUCTION DISABLED]";
 
                                     Console.WriteLine(
-                                        $"{logLabel} {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
+                                        $"{logLabel} {FormatPodDisplayName(pod)} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
 
                                     string message = destroyed
-                                        ? $"{Icons.Fail} Pod `{_pod.Metadata.Name}` restarted due to connection problems{resourcesReport}"
-                                        : $"{Icons.Warning} Pod `{_pod.Metadata.Name}` has connection problems but self-destruction is disabled{resourcesReport}";
+                                        ? $"{Icons.Fail} Pod `{FormatPodDisplayName(pod)}` restarted due to connection problems{resourcesReport}"
+                                        : $"{Icons.Warning} Pod `{FormatPodDisplayName(pod)}` has connection problems but self-destruction is disabled{resourcesReport}";
 
                                     await _sendMessage(message);
                                 }
@@ -563,10 +576,10 @@ internal class PodMonitor : IDisposable
                                 string resourcesReport = await GetResourcesAsync(pod);
 
                                 Console.WriteLine(
-                                    $"[MONITOR RESOURCE FAULTY] {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
+                                    $"[MONITOR RESOURCE FAULTY] {FormatPodDisplayName(pod)} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
 
                                 await _sendMessage(
-                                    $"{Icons.Fire} Pod `{_pod.Metadata.Name}`'s resource usage is over {_restartThreshold:P0} threshold{resourcesReport}");
+                                    $"{Icons.Fire} Pod `{FormatPodDisplayName(pod)}`'s resource usage is over {_restartThreshold:P0} threshold{resourcesReport}");
 
                                 if (!_resourceInstabilityRecorded)
                                 {
@@ -587,10 +600,10 @@ internal class PodMonitor : IDisposable
                                 string resourcesReport = await GetResourcesAsync(pod);
 
                                 Console.WriteLine(
-                                    $"[MONITOR RESOURCE HEALTHY] {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
+                                    $"[MONITOR RESOURCE HEALTHY] {FormatPodDisplayName(pod)} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
 
                                 await _sendMessage(
-                                    $"{Icons.Check} Pod `{_pod.Metadata.Name}`'s resource usage is fine now{resourcesReport}");
+                                    $"{Icons.Check} Pod `{FormatPodDisplayName(pod)}`'s resource usage is fine now{resourcesReport}");
                             }
 
                             if (resourceStopwatch.Elapsed >= _resourceIssueWindow)
@@ -608,11 +621,11 @@ internal class PodMonitor : IDisposable
                                         : "[MONITOR RESOURCE FAULTY - DESTRUCTION DISABLED]";
 
                                     Console.WriteLine(
-                                        $"{logLabel} {_pod.Metadata.Name} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
+                                        $"{logLabel} {FormatPodDisplayName(pod)} (Up for {TimeSpan.FromSeconds(SecondsAlive).Humanize(4, minUnit: TimeUnit.Second)}){resourcesReport}");
 
                                     string message = destroyed
-                                        ? $"{Icons.Fail} Pod `{_pod.Metadata.Name}` restarted due to high resource usage{resourcesReport}"
-                                        : $"{Icons.Warning} Pod `{_pod.Metadata.Name}` has high resource usage but self-destruction is disabled{resourcesReport}";
+                                        ? $"{Icons.Fail} Pod `{FormatPodDisplayName(pod)}` restarted due to high resource usage{resourcesReport}"
+                                        : $"{Icons.Warning} Pod `{FormatPodDisplayName(pod)}` has high resource usage but self-destruction is disabled{resourcesReport}";
 
                                     await _sendMessage(message);
                                 }
@@ -626,27 +639,27 @@ internal class PodMonitor : IDisposable
                             }
 
                             _status = Status;
-                        }
                     }
-                    else
-                    {
-                        Console.WriteLine($"[MONITOR REMOVED] {_pod.Metadata.Name}");
+                }
+                else
+                {
+                    Console.WriteLine($"[MONITOR REMOVED] {FormatPodDisplayName()}");
 
-                        _removePodMonitor(this, false);
+                    _removePodMonitor(this, false);
 
-                        break;
-                    }
+                    break;
+                }
 
                     TimeSpan remainingMilliseconds =
                         TimeSpan.FromMilliseconds(Math.Max(1000 - DateTime.Now.Subtract(now).TotalMilliseconds, 0));
 
                     await Task.Delay(remainingMilliseconds, _cancellationToken);
                 }
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(
-                    $"[MONITOR CRASHED] {_pod.Metadata.Name}{Environment.NewLine}Message: {e.Message}{Environment.NewLine}Stacktrace: {e.StackTrace}");
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(
+                $"[MONITOR CRASHED] {FormatPodDisplayName()}{Environment.NewLine}Message: {e.Message}{Environment.NewLine}Stacktrace: {e.StackTrace}");
 
                 _removePodMonitor(this, false);
             }
@@ -681,6 +694,6 @@ internal class PodMonitor : IDisposable
 
         _client.Dispose();
 
-        Console.WriteLine($"[MONITOR DISPOSED] {_pod.Metadata.Name}");
+        Console.WriteLine($"[MONITOR DISPOSED] {FormatPodDisplayName()}");
     }
 }

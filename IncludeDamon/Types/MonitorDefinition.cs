@@ -32,6 +32,8 @@ internal sealed class MonitorDefinition
 
     public double? RestartCooldownSeconds { get; set; }
 
+    public double? InstabilityRateThresholdPerMinute { get; set; }
+
     public bool? DestroyFaultyPods { get; set; }
 
     public bool? LogNotDestroying { get; set; }
