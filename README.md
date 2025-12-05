@@ -93,7 +93,8 @@ Optional fields:
 `hostHeader` (defaults to host[:port]), `issueWindowSeconds` (defaults to `60`),
 `startupWindowSeconds` (defaults to `120`), `resourceIssueWindowSeconds` (defaults to `300`),
 `restartThreshold` (defaults to `0.9`), `restartCooldownSeconds` (defaults to `60`),
-`instabilityRateThresholdPerMinute` (defaults to `0.1`), `destroyFaultyPods` (defaults to `false`), and `logNotDestroying` (defaults to `false`).
+`instabilityRateThresholdPerMinute` (defaults to `0.1`), `instabilityEventThreshold` (defaults to `5`),
+`destroyFaultyPods` (defaults to `false`), and `logNotDestroying` (defaults to `false`).
 
 You can also provide a `monitors` array per target to fan out multiple checks with their own overrides (top-level fields act as defaults when omitted):
 ```

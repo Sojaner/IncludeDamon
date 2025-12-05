@@ -34,6 +34,8 @@ internal sealed class MonitorDefinition
 
     public double? InstabilityRateThresholdPerMinute { get; set; }
 
+    public int? InstabilityEventThreshold { get; set; }
+
     public bool? DestroyFaultyPods { get; set; }
 
     public bool? LogNotDestroying { get; set; }

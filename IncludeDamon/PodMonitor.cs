@@ -68,6 +68,8 @@ internal class PodMonitor : IDisposable
 
     private readonly double _instabilityRateThresholdPerMinute;
 
+    private readonly int _instabilityEventThreshold;
+
     private readonly bool _shouldDestroyFaultyPods;
 
     private readonly bool _logNotDestroying;
@@ -126,6 +128,8 @@ internal class PodMonitor : IDisposable
         _restartThreshold = target.RestartThreshold;
 
         _instabilityRateThresholdPerMinute = target.InstabilityRateThresholdPerMinute;
+
+        _instabilityEventThreshold = target.InstabilityEventThreshold;
 
         _shouldDestroyFaultyPods = target.ShouldDestroyFaultyPods;
 
@@ -348,6 +352,14 @@ internal class PodMonitor : IDisposable
         double minutes = Math.Max(span.TotalMinutes, 1);
 
         double ratePerMinute = _instabilityEvents.Count / minutes;
+
+        if (_instabilityEvents.Count >= _instabilityEventThreshold)
+        {
+            forcedReason =
+                $"{category} instability occurred {_instabilityEvents.Count} times (threshold {_instabilityEventThreshold})";
+
+            return true;
+        }
 
         if (ratePerMinute > _instabilityRateThresholdPerMinute)
         {

@@ -140,6 +140,10 @@ internal static class MonitorConfiguration
                 double instabilityRateThresholdPerMinute = ResolveInstabilityRateThreshold(
                     monitor.InstabilityRateThresholdPerMinute ?? dto.InstabilityRateThresholdPerMinute, monitorLabel);
 
+                int instabilityEventThreshold =
+                    ResolveInstabilityEventThreshold(monitor.InstabilityEventThreshold ?? dto.InstabilityEventThreshold,
+                        monitorLabel);
+
                 bool shouldDestroyFaultyPods = ResolveBool(monitor.DestroyFaultyPods, dto.DestroyFaultyPods,
                     MonitorTarget.DefaultShouldDestroyFaultyPods);
 
@@ -157,7 +161,8 @@ internal static class MonitorConfiguration
                 monitorTargets.Add(new MonitorTarget(namespaceName, resourceType, resourceName, resourceKind, paths,
                     externalBaseUri, port, hostHeader, scheme, verb, payload, contentType, responseTimeout,
                     issueWindow, startupWindow, resourceIssueWindow, restartCooldown, restartThreshold,
-                    instabilityRateThresholdPerMinute, shouldDestroyFaultyPods, logNotDestroying));
+                    instabilityRateThresholdPerMinute, instabilityEventThreshold, shouldDestroyFaultyPods,
+                    logNotDestroying));
             }
         }
 
@@ -187,6 +192,7 @@ internal static class MonitorConfiguration
                     RestartCooldownSeconds = dto.RestartCooldownSeconds,
                     RestartThreshold = dto.RestartThreshold,
                     InstabilityRateThresholdPerMinute = dto.InstabilityRateThresholdPerMinute,
+                    InstabilityEventThreshold = dto.InstabilityEventThreshold,
                     DestroyFaultyPods = dto.DestroyFaultyPods,
                     LogNotDestroying = dto.LogNotDestroying
                 }
@@ -212,6 +218,22 @@ internal static class MonitorConfiguration
     private static double ResolveRestartThreshold(double? restartThreshold)
     {
         return restartThreshold is > 0 ? restartThreshold.Value : MonitorTarget.DefaultRestartThreshold;
+    }
+
+    private static int ResolveInstabilityEventThreshold(int? instabilityEventThreshold, string monitorLabel)
+    {
+        if (instabilityEventThreshold is null)
+        {
+            return MonitorTarget.DefaultInstabilityEventThreshold;
+        }
+
+        if (instabilityEventThreshold <= 0)
+        {
+            throw new ConfigurationException(
+                $"Target '{monitorLabel}' must specify 'instabilityEventThreshold' greater than 0 when provided.");
+        }
+
+        return instabilityEventThreshold.Value;
     }
 
     private static double ResolveInstabilityRateThreshold(double? instabilityRateThresholdPerMinute, string monitorLabel)
